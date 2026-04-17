@@ -41,7 +41,7 @@ def add_ml_filter(c):
 
 def add_tm_call(c):
     if "manage_trades(" in c: return c
-    for p in [r'([ \t]+)(validate_all_open_trades\([^)]+\))', r'([ \t]+)(trailing_stop_monitor\([^)]+\))', r'([ \t]+)(logger\.info.*scan.*complete)']:
+    for p in [r'([ \t]+)(validate_all_open_trades\([^)]+\))', r'([ \t]+)(trailing_stop_monitor\([^)]+\))', r'([ \t]+)(logger\.info.*[Ss]can.*[Cc]omplete.*)']:
         m = re.search(p, c, re.I)
         if m:
             ind = m.group(1)
