@@ -9,7 +9,7 @@ from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger("signal_scorer")
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DATA_DIR / "trading.db"
+DB_PATH = DATA_DIR / "bot.db"
 MODEL_PATH = DATA_DIR / "signal_model.pkl"
 ENCODERS_PATH = DATA_DIR / "signal_encoders.pkl"
 META_PATH = DATA_DIR / "signal_model_meta.json"
@@ -36,14 +36,14 @@ def _parse_regime(regime_str):
 
 def _extract_features(row):
     regime_trend, regime_vol = _parse_regime(row.get("regime", ""))
-    ts = row.get("opened_at") or row.get("timestamp") or ""
+    ts = row.get("timestamp") or row.get("opened_at") or ""
     hour, dow = 12, 3
     if ts:
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
             hour, dow = dt.hour, dt.weekday()
         except: pass
-    return {"combo": str(row.get("combo","unknown")).lower(), "mss_type": str(row.get("mss_type","none")).lower(),
+    return {"combo": str(row.get("combo") or "_".join(filter(None, [str(row.get("zone_types","")), str(row.get("mss_type","")), str(row.get("direction",""))]))).lower(), "mss_type": str(row.get("mss_type","none")).lower(),
             "regime_trend": regime_trend, "regime_vol": regime_vol, "session": str(row.get("session","unknown")).lower(),
             "timeframe": str(row.get("timeframe","M15")).upper(), "instrument_category": _get_instrument_category(row.get("epic","")),
             "confluence": float(row.get("confluence",0)), "rsi": float(row.get("rsi",50)), "adx": float(row.get("adx",25)),

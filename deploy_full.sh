@@ -29,7 +29,7 @@ from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger("signal_scorer")
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DATA_DIR / "trading.db"
+DB_PATH = DATA_DIR / "bot.db"
 MODEL_PATH = DATA_DIR / "signal_model.pkl"
 ENCODERS_PATH = DATA_DIR / "signal_encoders.pkl"
 META_PATH = DATA_DIR / "signal_model_meta.json"
@@ -56,14 +56,14 @@ def _parse_regime(regime_str):
 
 def _extract_features(row):
     regime_trend, regime_vol = _parse_regime(row.get("regime", ""))
-    ts = row.get("opened_at") or row.get("timestamp") or ""
+    ts = row.get("timestamp") or row.get("opened_at") or ""
     hour, dow = 12, 3
     if ts:
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
             hour, dow = dt.hour, dt.weekday()
         except: pass
-    return {"combo": str(row.get("combo","unknown")).lower(), "mss_type": str(row.get("mss_type","none")).lower(),
+    return {"combo": str(row.get("combo") or "_".join(filter(None, [str(row.get("zone_types","")), str(row.get("mss_type","")), str(row.get("direction",""))]))).lower(), "mss_type": str(row.get("mss_type","none")).lower(),
             "regime_trend": regime_trend, "regime_vol": regime_vol, "session": str(row.get("session","unknown")).lower(),
             "timeframe": str(row.get("timeframe","M15")).upper(), "instrument_category": _get_instrument_category(row.get("epic","")),
             "confluence": float(row.get("confluence",0)), "rsi": float(row.get("rsi",50)), "adx": float(row.get("adx",25)),
@@ -232,7 +232,7 @@ import os, logging, sqlite3
 from pathlib import Path
 logger = logging.getLogger("trade_manager")
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DATA_DIR / "trading.db"
+DB_PATH = DATA_DIR / "bot.db"
 BREAKEVEN_TRIGGER_R = float(os.getenv("BREAKEVEN_TRIGGER_R", "1.0"))
 PARTIAL_TP_ENABLED = os.getenv("PARTIAL_TP_ENABLED", "true").lower() == "true"
 PARTIAL_TP_TARGET_R = float(os.getenv("PARTIAL_TP_TARGET_R", "1.5"))
@@ -261,7 +261,7 @@ def get_open_trades_for_management():
     return trades
 
 def _calc_r(t, price):
-    entry, sl, d = float(t.get("entry",0)), float(t.get("stop_loss",0)), t.get("direction","BUY")
+    entry, sl, d = float(t.get("entry_price",0)), float(t.get("stop_loss",0)), t.get("direction","BUY")
     if entry == 0 or sl == 0: return 0
     risk = abs(entry - sl)
     if risk == 0: return 0
@@ -271,7 +271,7 @@ def check_breakeven_triggers(trades, prices, update_sl_fn, notify_fn=None):
     triggered = []
     for t in trades:
         if t.get("breakeven_hit"): continue
-        did, epic, entry = t.get("deal_id"), t.get("epic"), float(t.get("entry",0))
+        did, epic, entry = t.get("deal_id"), t.get("epic"), float(t.get("entry_price",0))
         if epic not in prices: continue
         r = _calc_r(t, prices[epic])
         if r >= BREAKEVEN_TRIGGER_R:
@@ -292,7 +292,7 @@ def check_partial_tp_triggers(trades, prices, partial_fn, update_sl_fn, atr_fn, 
     triggered = []
     for t in trades:
         if t.get("partial_tp_hit"): continue
-        did, epic, entry, d = t.get("deal_id"), t.get("epic"), float(t.get("entry",0)), t.get("direction")
+        did, epic, entry, d = t.get("deal_id"), t.get("epic"), float(t.get("entry_price",0)), t.get("direction")
         size = float(t.get("size",0)) or float(t.get("original_size",0))
         if epic not in prices or size == 0: continue
         cur = prices[epic]
@@ -322,7 +322,7 @@ def manage_trades(trades, prices, update_sl_fn, partial_fn, atr_fn, notify_fn=No
 def get_trade_status(did=None):
     trades = get_open_trades_for_management()
     if did: trades = [t for t in trades if t.get("deal_id","").startswith(did)]
-    return [{"deal_id":t.get("deal_id"),"epic":t.get("epic"),"direction":t.get("direction"),"entry":t.get("entry"),
+    return [{"deal_id":t.get("deal_id"),"epic":t.get("epic"),"direction":t.get("direction"),"entry_price":t.get("entry_price"),
              "stop_loss":t.get("stop_loss"),"breakeven_hit":bool(t.get("breakeven_hit")),"partial_tp_hit":bool(t.get("partial_tp_hit")),
              "ml_score":t.get("ml_score")} for t in trades]
 
