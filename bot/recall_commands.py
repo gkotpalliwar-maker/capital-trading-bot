@@ -73,7 +73,7 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         signals = [dict(r) for r in conn.execute(
-            "SELECT * FROM signals WHERE timestamp >= ? ORDER BY confluence DESC, timestamp DESC",
+            "SELECT * FROM signals WHERE timestamp >= ? ORDER BY timestamp DESC, confluence DESC",
             (cutoff,)
         ).fetchall()]
         conn.close()
@@ -173,8 +173,17 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 d_emoji = "\U0001f7e2" if sig["direction"] == "BUY" else "\U0001f534"
                 cur = sig.get("_current_price", 0)
+                sig_age = ""
+                try:
+                    ts = sig.get("timestamp", "")
+                    if ts:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
+                        mins = int((datetime.now(timezone.utc) - dt).total_seconds() / 60)
+                        sig_age = f" | {mins}m ago" if mins < 60 else f" | {mins//60}h{mins%60:02d}m ago"
+                except Exception:
+                    pass
                 text = (
-                    f"{d_emoji} <b>{sig['epic']} {sig['direction']}</b> [{sig['timeframe']}]\n"
+                    f"{d_emoji} <b>{sig['epic']} {sig['direction']}</b> [{sig['timeframe']}]{sig_age}\n"
                     f"Entry: {sig['entry_price']:.5f} | Now: {cur:.5f}\n"
                     f"SL: {sig['stop_loss']:.5f} | TP: {sig['take_profit']:.5f}\n"
                     f"Confluence: {sig['confluence']} | {sig.get('zone_types','')}\n"
@@ -194,7 +203,17 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if invalid:
             inv_text = f"\n\u274c <b>{len(invalid)} Invalid:</b>\n"
             for sig, reason in invalid[:15]:
-                inv_text += f"  \u2022 {sig['epic']} {sig['direction']} [{sig.get('timeframe','')}] C={sig.get('confluence',0)}: {reason}\n"
+                age = ""
+                try:
+                    from datetime import datetime, timezone
+                    ts = sig.get("timestamp", "")
+                    if ts:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
+                        mins = int((datetime.now(timezone.utc) - dt).total_seconds() / 60)
+                        age = f" {mins}m ago" if mins < 60 else f" {mins//60}h{mins%60:02d}m ago"
+                except Exception:
+                    pass
+                inv_text += f"  \u2022 {sig['epic']} {sig['direction']} [{sig.get('timeframe','')}] C={sig.get('confluence',0)}:{age} {reason}\n"
             if len(invalid) > 15:
                 inv_text += f"  ... and {len(invalid)-15} more\n"
             await update.message.reply_html(inv_text)
