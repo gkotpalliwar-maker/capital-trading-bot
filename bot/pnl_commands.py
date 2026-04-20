@@ -30,9 +30,13 @@ async def fixpnl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Get the API client from execution module
         try:
-            from execution import client
-        except ImportError:
-            await update.message.reply_text("\u274c Cannot access Capital.com API client")
+            import telegram_bot as _tb
+            client = _tb._client
+            if client is None:
+                await update.message.reply_text("\u274c API client not initialized yet (wait for first scan)")
+                return
+        except Exception as e:
+            await update.message.reply_text(f"\u274c Cannot access API client: {e}")
             return
 
         # Parse argument
