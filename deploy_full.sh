@@ -407,7 +407,7 @@ def patch(path, patches, lbl):
 # scanner.py
 def add_ml_imp(c):
     if "signal_scorer" in c: return c
-    i = "\nfrom signal_scorer import should_take_signal, score_signal\nfrom trade_manager import init_trade_manager_schema, manage_trades, get_open_trades_for_management\n"
+    i = "\nfrom signal_scorer import should_take_signal, score_signal\nfrom trade_manager import init_trade_manager_schema, manage_trades, get_open_trades_for_management\nfrom execution import get_current_price, get_instrument_atr\n"
     for m in ["from trade_validator import", "from instrument_manager import"]:
         if m in c:
             idx = c.index(m); end = c.index("\n", idx)

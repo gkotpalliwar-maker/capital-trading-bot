@@ -165,6 +165,21 @@ patch("bot/telegram_bot.py", [
     ("Recall handler", add_recall_handler),
 ], "telegram_bot")
 
+
+# ── Fix missing await on edit_message_text ────────────────────
+def fix_missing_await(c):
+    lines = c.split("\n")
+    fixed = 0
+    for i, line in enumerate(lines):
+        if "context.bot.edit_message_text(" in line and "await " not in line:
+            lines[i] = line.replace("context.bot.edit_message_text(", "await context.bot.edit_message_text(")
+            fixed += 1
+    if fixed:
+        print(f"  \u2705 telegram_bot: fixed {fixed} missing await(s)")
+    return "\n".join(lines)
+
+patch("bot/telegram_bot.py", [("Fix missing await", fix_missing_await)], "telegram_bot")
+
 # ── Update /help ──────────────────────────────────────────────
 with open("bot/telegram_bot.py") as f:
     code = f.read()
