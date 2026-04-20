@@ -9,6 +9,49 @@ logger = logging.getLogger("telegram")
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "bot.db"
 
+
+def _get_live_price(epic: str, instrument: str = "") -> float:
+    """Get current mid-price for an instrument. Tries multiple sources."""
+    # Try execution module first (has simple get_current_price(epic) -> float)
+    try:
+        from execution import get_current_price
+        p = get_current_price(epic)
+        if p and p > 0:
+            return float(p)
+    except Exception:
+        pass
+    # Try data_fetcher with both args
+    try:
+        from data_fetcher import get_current_price as dfp
+        result = dfp(epic, instrument) if instrument else dfp(epic)
+        if isinstance(result, dict):
+            bid = float(result.get("bid", 0) or 0)
+            ask = float(result.get("ask", result.get("offer", 0)) or 0)
+            return (bid + ask) / 2 if bid and ask else bid or ask
+        return float(result) if result else 0
+    except Exception:
+        pass
+    # Last resort: direct API call
+    try:
+        import requests, os
+        from dotenv import load_dotenv
+        load_dotenv()
+        base = os.getenv("CAPITAL_API_URL", "https://api-capital.backend-capital.com")
+        token = os.getenv("CST", "") or os.getenv("CAPITAL_API_KEY", "")
+        headers = {"X-CAP-API-KEY": os.getenv("CAPITAL_API_KEY", "")}
+        # Try session tokens if available
+        import scanner
+        if hasattr(scanner, "client") and hasattr(scanner.client, "session_headers"):
+            headers = scanner.client.session_headers
+        r = requests.get(f"{base}/api/v1/markets/{epic}", headers=headers, timeout=5)
+        s = r.json().get("snapshot", {})
+        bid = float(s.get("bid", 0))
+        ask = float(s.get("offer", 0))
+        return (bid + ask) / 2
+    except Exception:
+        return 0
+
+
 async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recall past signals and show which are still valid for trading.
     Usage: /recall [hours]  or  /recall [X]d for days
@@ -40,7 +83,6 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Revalidate each signal
-        from data_fetcher import get_current_price
         from market_hours import is_market_open
 
         valid = []
@@ -73,8 +115,7 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Check price drift
             try:
-                price_info = get_current_price(epic)
-                cur_price = price_info["ask"] if direction == "BUY" else price_info["bid"]
+                cur_price = _get_live_price(epic, sig.get("instrument", ""))
                 if entry > 0 and sl > 0:
                     risk = abs(entry - sl)
                     drift = abs(cur_price - entry)
