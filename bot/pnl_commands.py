@@ -70,10 +70,17 @@ async def fixpnl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Fetch transactions from Capital.com
         try:
             import re
-            resp = client.get("/api/v1/history/transactions", {
-                "lastPeriod": "2592000", "type": "ALL"
-            })
-            transactions = resp.get("transactions", [])
+            transactions = []
+            for period in ["86400", "604800", "1209600"]:
+                try:
+                    resp = client.get("/api/v1/history/transactions", {
+                        "lastPeriod": period, "type": "ALL"
+                    })
+                    transactions = resp.get("transactions", [])
+                    if transactions:
+                        break
+                except Exception:
+                    continue
         except Exception as e:
             await update.message.reply_text(f"\u274c API error: {e}")
             conn.close()
