@@ -18,12 +18,8 @@ def generate_weekend_report(client) -> str:
     # ── Open Positions from API ──
     positions = []
     try:
-        resp = client.session.get(
-            f"{client.api_url}/api/v1/positions",
-            headers=client.auth_headers
-        )
-        if resp.status_code == 200:
-            positions = resp.json().get("positions", [])
+        resp = client.get("/api/v1/positions", {})
+        positions = resp.get("positions", [])
     except Exception as e:
         logger.warning("Failed to fetch positions: %s", e)
 
