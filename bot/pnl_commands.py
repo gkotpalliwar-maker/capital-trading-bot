@@ -68,14 +68,10 @@ async def fixpnl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"\U0001f50d Checking {len(trades)} trade(s)...")
 
         # Fetch transactions from Capital.com
-        now = datetime.now(timezone.utc)
-        from_dt = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
-        to_dt = now.strftime("%Y-%m-%dT%H:%M:%S")
-
         try:
             import re
             resp = client.get("/api/v1/history/transactions", {
-                "from": from_dt, "to": to_dt, "type": "ALL"
+                "lastPeriod": "2592000", "type": "ALL"
             })
             transactions = resp.get("transactions", [])
         except Exception as e:
