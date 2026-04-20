@@ -27,28 +27,34 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if instruments_path.exists():
             with open(instruments_path) as f:
                 instruments = json.load(f)
-            # Handle both list and dict formats
-            if isinstance(instruments, dict):
+            # instruments.json has structure:
+            # {"scan_list": ["EURUSD", ...], "lot_overrides": {...}, ...}
+            if isinstance(instruments, dict) and "scan_list" in instruments:
+                scan_list = instruments["scan_list"]
+                if isinstance(scan_list, list):
+                    for epic in scan_list:
+                        inst_map[epic.lower()] = epic
+            elif isinstance(instruments, dict):
+                # Maybe a flat {name: epic} or {name: {epic:..., scan:...}} format
+                skip_keys = {"added", "removed", "lot_overrides", "pip_overrides",
+                             "scan_list", "defaults", "config"}
                 for k, v in instruments.items():
+                    if k in skip_keys:
+                        continue
                     if isinstance(v, dict):
                         if v.get("scan", True):
                             inst_map[k] = v.get("epic", k.upper())
-                    elif isinstance(v, list):
-                        # [epic, lot_size, pip_size, scan] format
-                        epic = v[0] if v else k.upper()
-                        scan = v[3] if len(v) > 3 else True
-                        if scan:
-                            inst_map[k] = epic
-                    else:
-                        inst_map[k] = str(v)
+                    elif isinstance(v, str):
+                        inst_map[k] = v
             elif isinstance(instruments, list):
                 for item in instruments:
-                    if isinstance(item, dict):
-                        name = item.get("name", item.get("instrument", ""))
+                    if isinstance(item, str):
+                        inst_map[item.lower()] = item
+                    elif isinstance(item, dict):
+                        name = item.get("name", item.get("epic", ""))
                         epic = item.get("epic", name.upper())
-                        scan = item.get("scan", True)
-                        if name and scan:
-                            inst_map[name] = epic
+                        if name:
+                            inst_map[name.lower()] = epic
         if not inst_map:
             inst_map = {
                 "eurusd": "EURUSD", "gbpusd": "GBPUSD", "usdjpy": "USDJPY",
