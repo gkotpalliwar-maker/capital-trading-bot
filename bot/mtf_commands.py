@@ -23,13 +23,33 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Load instrument map from config
         data_dir = Path(__file__).resolve().parent.parent / "data"
         instruments_path = data_dir / "instruments.json"
+        inst_map = {}
         if instruments_path.exists():
             with open(instruments_path) as f:
                 instruments = json.load(f)
-            inst_map = {k: v.get("epic", k.upper()) for k, v in instruments.items()
-                       if v.get("scan", True)}
-        else:
-            # Fallback
+            # Handle both list and dict formats
+            if isinstance(instruments, dict):
+                for k, v in instruments.items():
+                    if isinstance(v, dict):
+                        if v.get("scan", True):
+                            inst_map[k] = v.get("epic", k.upper())
+                    elif isinstance(v, list):
+                        # [epic, lot_size, pip_size, scan] format
+                        epic = v[0] if v else k.upper()
+                        scan = v[3] if len(v) > 3 else True
+                        if scan:
+                            inst_map[k] = epic
+                    else:
+                        inst_map[k] = str(v)
+            elif isinstance(instruments, list):
+                for item in instruments:
+                    if isinstance(item, dict):
+                        name = item.get("name", item.get("instrument", ""))
+                        epic = item.get("epic", name.upper())
+                        scan = item.get("scan", True)
+                        if name and scan:
+                            inst_map[name] = epic
+        if not inst_map:
             inst_map = {
                 "eurusd": "EURUSD", "gbpusd": "GBPUSD", "usdjpy": "USDJPY",
                 "gold": "GOLD", "crude": "OIL_CRUDE", "btcusd": "BTCUSD",
