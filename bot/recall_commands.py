@@ -205,7 +205,6 @@ async def recall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for sig, reason in invalid[:15]:
                 age = ""
                 try:
-                    from datetime import datetime, timezone
                     ts = sig.get("timestamp", "")
                     if ts:
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
