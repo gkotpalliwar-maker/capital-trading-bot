@@ -1,6 +1,6 @@
 import re, os
 
-path = os.path.join(os.path.dirname(__file__), "..", "bot", "execution.py")
+path = os.path.join("bot", "execution.py")
 with open(path) as f:
     code = f.read()
 
