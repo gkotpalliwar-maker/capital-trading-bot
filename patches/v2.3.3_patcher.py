@@ -146,7 +146,7 @@ def add_recall_import(c):
         if marker in c:
             idx = c.index(marker)
             end = c.index("\n", idx)
-            return c[:end+1] + "from recall_commands import recall_cmd\n" + c[end+1:]
+            return c[:end+1] + "from recall_commands import recall_cmd\nfrom pnl_commands import fixpnl_cmd\n" + c[end+1:]
     return c
 
 def add_recall_handler(c):
@@ -157,7 +157,7 @@ def add_recall_handler(c):
               r'(app\.add_handler\(CommandHandler\("help"[^)]+\)\))']:
         m = re.search(p, c)
         if m:
-            return c[:m.end()] + '\n    app.add_handler(CommandHandler("recall", recall_cmd))\n' + c[m.end():]
+            return c[:m.end()] + '\n    app.add_handler(CommandHandler("recall", recall_cmd))\n    app.add_handler(CommandHandler("fixpnl", fixpnl_cmd))\n' + c[m.end():]
     return c
 
 patch("bot/telegram_bot.py", [
