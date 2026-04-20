@@ -140,24 +140,34 @@ patch("bot/scanner.py", [
 # ── telegram_bot.py patches ───────────────────────────────────
 
 def add_recall_import(c):
-    if "recall_commands" in c:
+    added = ""
+    if "recall_commands" not in c:
+        added += "from recall_commands import recall_cmd\n"
+    if "pnl_commands" not in c:
+        added += "from pnl_commands import fixpnl_cmd\n"
+    if not added:
         return c
-    for marker in ["from signal_scorer_commands import", "from trade_manager_commands import"]:
+    for marker in ["from signal_scorer_commands import", "from trade_manager_commands import", "from recall_commands import"]:
         if marker in c:
             idx = c.index(marker)
             end = c.index("\n", idx)
-            return c[:end+1] + "from recall_commands import recall_cmd\nfrom pnl_commands import fixpnl_cmd\n" + c[end+1:]
+            return c[:end+1] + added + c[end+1:]
     return c
 
 def add_recall_handler(c):
-    if '"recall"' in c:
+    if '"recall"' in c and '"fixpnl"' in c:
         return c
     for p in [r'(app\.add_handler\(CommandHandler\("trademanage"[^)]+\)\))',
               r'(app\.add_handler\(CommandHandler\("mlstats"[^)]+\)\))',
               r'(app\.add_handler\(CommandHandler\("help"[^)]+\)\))']:
         m = re.search(p, c)
         if m:
-            return c[:m.end()] + '\n    app.add_handler(CommandHandler("recall", recall_cmd))\n    app.add_handler(CommandHandler("fixpnl", fixpnl_cmd))\n' + c[m.end():]
+            new_handlers = ""
+            if '"recall"' not in c:
+                new_handlers += '\n    app.add_handler(CommandHandler("recall", recall_cmd))'
+            if '"fixpnl"' not in c:
+                new_handlers += '\n    app.add_handler(CommandHandler("fixpnl", fixpnl_cmd))'
+            return c[:m.end()] + new_handlers + "\n" + c[m.end():]
     return c
 
 patch("bot/telegram_bot.py", [
