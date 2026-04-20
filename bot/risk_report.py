@@ -35,7 +35,7 @@ def generate_weekend_report(client) -> str:
     conn.row_factory = sqlite3.Row
 
     weekly_trades = conn.execute(
-        "SELECT * FROM trades WHERE status='closed' AND closed_at >= ?",
+        "SELECT * FROM trades WHERE status='closed' AND timestamp >= ?",
         (week_start.isoformat(),)
     ).fetchall()
 
