@@ -35,24 +35,24 @@ def generate_weekend_report(client) -> str:
     conn.row_factory = sqlite3.Row
 
     weekly_trades = conn.execute(
-        "SELECT * FROM trades WHERE status=\'closed\' AND closed_at >= ?",
+        "SELECT * FROM trades WHERE status='closed' AND closed_at >= ?",
         (week_start.isoformat(),)
     ).fetchall()
 
     all_closed = conn.execute(
-        "SELECT * FROM trades WHERE status=\'closed\' AND pnl IS NOT NULL"
+        "SELECT * FROM trades WHERE status='closed' AND pnl IS NOT NULL"
     ).fetchall()
 
     open_db_trades = conn.execute(
-        "SELECT * FROM trades WHERE status=\'open\'"
+        "SELECT * FROM trades WHERE status='open'"
     ).fetchall()
 
     # Weekly signals stats
     weekly_signals = conn.execute(
         "SELECT COUNT(*) as total, "
-        "SUM(CASE WHEN status=\'executed\' THEN 1 ELSE 0 END) as executed, "
-        "SUM(CASE WHEN status=\'skipped\' THEN 1 ELSE 0 END) as skipped, "
-        "SUM(CASE WHEN status=\'mtf_blocked\' THEN 1 ELSE 0 END) as mtf_blocked "
+        "SUM(CASE WHEN status='executed' THEN 1 ELSE 0 END) as executed, "
+        "SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END) as skipped, "
+        "SUM(CASE WHEN status='mtf_blocked' THEN 1 ELSE 0 END) as mtf_blocked "
         "FROM signals WHERE timestamp >= ?",
         (week_start.isoformat(),)
     ).fetchone()
@@ -115,7 +115,7 @@ def generate_weekend_report(client) -> str:
     # ── Build report ──
     report = []
     report.append("\U0001f4cb <b>Weekend Risk Report</b>")
-    report.append(f"\U0001f4c5 Week of {week_start.strftime(\'%d %b %Y\')}")
+    report.append(f"\U0001f4c5 Week of {week_start.strftime('%d %b %Y')}")
     report.append("\u2500" * 40)
 
     # Weekly performance
@@ -126,9 +126,9 @@ def generate_weekend_report(client) -> str:
     report.append(f"  Trades: {weekly_count} | W/L: {weekly_wins}/{weekly_losses} | WR: {weekly_wr:.0f}%")
     report.append(f"  Avg R: {avg_r:+.2f}")
     if best:
-        report.append(f"  Best: {best[\'epic\']} {best[\'direction\']} {float(best[\'pnl\'] or 0):+.2f} SGD")
+        report.append(f"  Best: {best['epic']} {best['direction']} {float(best['pnl'] or 0):+.2f} SGD")
     if worst and float(worst["pnl"] or 0) < 0:
-        report.append(f"  Worst: {worst[\'epic\']} {worst[\'direction\']} {float(worst[\'pnl\'] or 0):+.2f} SGD")
+        report.append(f"  Worst: {worst['epic']} {worst['direction']} {float(worst['pnl'] or 0):+.2f} SGD")
 
     # Signal stats
     if weekly_signals:
@@ -168,13 +168,13 @@ def generate_weekend_report(client) -> str:
     report.append(f"  Trades: {total_trades} | P&L: {total_pnl:+.2f} SGD | WR: {total_wr:.0f}%")
 
     report.append("")
-    report.append(f"\u23f0 {now.strftime(\'%H:%M UTC %d/%m/%Y\')}")
+    report.append(f"\u23f0 {now.strftime('%H:%M UTC %d/%m/%Y')}")
 
     return "\n".join(report)
 
 
 def should_send_report(now: datetime = None) -> bool:
-    """Check if it\'s time to send the weekly report (Fri 21:50 UTC)."""
+    """Check if it's time to send the weekly report (Fri 21:50 UTC)."""
     global _last_report_date
     if now is None:
         now = datetime.now(timezone.utc)
