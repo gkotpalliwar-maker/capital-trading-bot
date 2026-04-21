@@ -64,6 +64,38 @@ def mark_trade_invalidated(deal_id, reason):
     conn.execute("UPDATE trades SET validation_status='invalidated' WHERE deal_id=?", (deal_id,))
     conn.commit(); conn.close()
 
+
+
+def init_validation_schema():
+    conn = sqlite3.connect(str(DB_PATH)); c = conn.cursor()
+    c.execute("PRAGMA table_info(trades)"); cols = [r[1] for r in c.fetchall()]
+    for col, tp in {"mss_type":"TEXT","pattern_tf":"TEXT","invalidation_price":"REAL","pattern_context":"TEXT","validation_status":"TEXT DEFAULT 'valid'"}.items():
+        if col not in cols: c.execute(f"ALTER TABLE trades ADD COLUMN {col} {tp}"); logger.info(f"Added {col}")
+    conn.commit(); conn.close()
+
+def validate_all_open_trades(fetch_fn, indicator_fn, mss_fn, close_fn, notify_fn):
+    trades = get_open_trades_for_validation()
+    if not trades: return []
+    closed = []
+    for t in trades:
+        inv = t.get("invalidation_price")
+        if not inv: continue  # skip trades without invalidation_price for auto-close
+        try:
+            df = fetch_fn(t["epic"], t.get("pattern_tf") or "M15", 200)
+            if df is None or df.empty: continue
+            df = indicator_fn(df)
+            ok, reason = validate_trade(t, df["close"].iloc[-1], mss_fn(df))
+            if not ok:
+                logger.warning(f"INVALID: {t['deal_id']} {t['epic']} - {reason}")
+                try: close_fn(t["deal_id"])
+                except Exception as e: logger.error(f"Close failed: {e}")
+                mark_trade_invalidated(t["deal_id"], reason)
+                try: notify_fn(f"PATTERN INVALIDATED\n{t['deal_id']}\n{t['epic']} ({t['direction']})\nReason: {reason}\nCLOSED automatically")
+                except: pass
+                closed.append({"deal_id": t["deal_id"], "reason": reason})
+        except Exception as e: logger.error(f"Validate err {t.get('deal_id')}: {e}")
+    return closed
+
 def compute_invalidation_price(direction, mss_events):
     r = [e for e in mss_events if e.get("direction") == direction]
     if not r: return None
