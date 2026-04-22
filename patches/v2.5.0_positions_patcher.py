@@ -12,7 +12,6 @@ with open(tb_path) as f:
 
 changes = 0
 
-# Check if positions_commands is already imported
 if "positions_commands" not in tb:
     # Add import
     last_import = None
@@ -25,14 +24,13 @@ if "positions_commands" not in tb:
         changes += 1
         print("  + Added positions_commands import")
 
-    # Check if there's an existing inline positions function and remove/replace handler
-    # Find existing positions CommandHandler and replace it
-    old_handler = re.search(r'app\.add_handler\(CommandHandler\(["']positions["'],\s*\w+\)\)', tb)
+    # Find existing /positions handler and replace
+    old_pattern = r'app\.add_handler\(CommandHandler\(["\'"]positions["\'"],\s*\w+\)\)'
+    old_handler = re.search(old_pattern, tb)
     if old_handler:
-        # Replace with new handler pointing to imported positions_cmd
         tb = tb[:old_handler.start()] + 'app.add_handler(CommandHandler("positions", positions_cmd))' + tb[old_handler.end():]
         changes += 1
-        print("  + Replaced existing /positions handler with positions_commands.positions_cmd")
+        print("  + Replaced existing /positions handler")
     else:
         # Add new handler
         last_handler = None
@@ -45,17 +43,17 @@ if "positions_commands" not in tb:
             changes += 1
             print("  + Added /positions command handler")
 
-    # Add CallbackQueryHandler for guard buttons
+    # Add CallbackQueryHandler import if missing
     if "CallbackQueryHandler" not in tb:
-        # Add import
-        tb = tb.replace(
-            "from telegram.ext import",
-            "from telegram.ext import CallbackQueryHandler, "
-        )
-        print("  + Added CallbackQueryHandler import")
+        old_ext_import = re.search(r"from telegram\.ext import (.+)", tb)
+        if old_ext_import:
+            old_line = old_ext_import.group(0)
+            new_line = old_line.rstrip() + ", CallbackQueryHandler"
+            tb = tb.replace(old_line, new_line, 1)
+            print("  + Added CallbackQueryHandler to telegram.ext import")
 
+    # Add guard button callback handler
     if "guard_button_callback" not in tb:
-        # Find last add_handler and add callback handler after it
         last_handler = None
         for m in re.finditer(r"app\.add_handler\(.+?\)", tb):
             last_handler = m
