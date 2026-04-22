@@ -4,8 +4,10 @@ import os
 print("v2.5.0: News Filter Integration Patcher")
 print("=" * 50)
 
+BOT_DIR = os.path.join(os.getcwd(), "bot")
+
 # ── 1. Patch telegram_bot.py — register news commands ──
-tb_path = os.path.join(os.path.dirname(__file__), "..", "bot", "telegram_bot.py")
+tb_path = os.path.join(BOT_DIR, "telegram_bot.py")
 with open(tb_path) as f:
     tb = f.read()
 
@@ -27,8 +29,7 @@ if "news_commands" not in tb:
         changes += 1
         print("  + Added news_commands import")
 
-    # Register command handlers
-    # Find the last app.add_handler line
+    # Register command handlers - find the last app.add_handler line
     last_handler = None
     for m in re.finditer(r"app\.add_handler\(CommandHandler\(.+?\)\)", tb):
         last_handler = m
@@ -52,37 +53,35 @@ else:
     print("  telegram_bot.py: news_commands already integrated")
 
 # ── 2. Patch scanner.py — add news check before signal emission ──
-sc_path = os.path.join(os.path.dirname(__file__), "..", "bot", "scanner.py")
+sc_path = os.path.join(BOT_DIR, "scanner.py")
 with open(sc_path) as f:
     sc = f.read()
 
 sc_changes = 0
 
 if "news_filter" not in sc:
-    # Add import at top
+    # Add import at top (safe try/except)
     import_line = "\ntry:\n    from news_filter import check_news_risk, is_guard_active, NEWS_CONFLUENCE_PENALTY, NEWS_REQUIRED\nexcept ImportError:\n    check_news_risk = None\n"
-    
+
     # Insert after existing imports
     import_section_end = 0
     for m in re.finditer(r"^(?:import |from )", sc, re.MULTILINE):
         import_section_end = sc.index("\n", m.end()) + 1
-    
+
     if import_section_end > 0:
         sc = sc[:import_section_end] + import_line + sc[import_section_end:]
         sc_changes += 1
         print("  + Added news_filter import to scanner.py")
 
-    # Find the signal emission point (where confluence is finalized)
-    # Look for the MTF check block we added in v2.4.0 and add news check after it
-    mtf_block_end = sc.find("# END MTF check")
-    if mtf_block_end == -1:
-        # Try alternative marker
-        mtf_block_end = sc.find("mtf_bonus")
-        if mtf_block_end != -1:
-            mtf_block_end = sc.index("\n", sc.index("\n", mtf_block_end) + 1) + 1
+    # Find the MTF check block we added in v2.4.0 and add news check after it
+    mtf_end = sc.find("# END MTF check")
+    if mtf_end == -1:
+        mtf_end = sc.find("mtf_bonus")
+        if mtf_end != -1:
+            mtf_end = sc.index("\n", sc.index("\n", mtf_end) + 1) + 1
 
-    if mtf_block_end > 0:
-        insert_pos = sc.index("\n", mtf_block_end) + 1
+    if mtf_end > 0:
+        insert_pos = sc.index("\n", mtf_end) + 1
         news_check = '''
                     # ── v2.5.0 NEWS CHECK ──
                     if check_news_risk is not None and is_guard_active():
