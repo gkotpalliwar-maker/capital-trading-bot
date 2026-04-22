@@ -22,7 +22,6 @@ def _get_positions_from_api(client):
                 "upl": float(pos.get("upl", 0)),
                 "current_bid": float(mkt.get("bid", 0)),
                 "current_ask": float(mkt.get("offer", 0)),
-                "source": "api",
             })
         return result
     except Exception as e:
@@ -31,18 +30,15 @@ def _get_positions_from_api(client):
 
 
 def _get_news_section(epic):
-    """Get news risk section for an instrument. Returns list of lines."""
+    """Get news risk section for an instrument."""
     lines = []
     try:
-        from news_filter import check_news_risk, get_upcoming_events, is_guard_active, NEWS_ENABLED, INSTRUMENT_CURRENCIES
-        # Check news risk for this instrument
-        risk_level, relevant_events, reason = check_news_risk(epic)
-
-        # Also get upcoming events for this instrument (next 24h) even if guard is off
+        from news_filter import (
+            check_news_risk, get_upcoming_events,
+            INSTRUMENT_CURRENCIES, INSTRUMENT_KEYWORDS
+        )
         currencies = INSTRUMENT_CURRENCIES.get(epic, ["USD"])
-        from news_filter import INSTRUMENT_KEYWORDS
         keywords = INSTRUMENT_KEYWORDS.get(epic, [])
-
         upcoming = get_upcoming_events(hours=24, impact_filter="Medium")
         instrument_events = []
         for ev in upcoming:
@@ -54,56 +50,41 @@ def _get_news_section(epic):
             if is_relevant:
                 instrument_events.append(ev)
 
-        if not instrument_events and risk_level == "clear":
+        if not instrument_events:
             lines.append("  \u2500\u2500\u2500 News Risk \u2500\u2500\u2500")
             lines.append("  \U0001f7e2 No upcoming events")
             return lines
 
         lines.append("  \u2500\u2500\u2500 News Risk \u2500\u2500\u2500")
-
-        # Show relevant events
         for ev in instrument_events[:3]:
             mins = ev["minutes_away"]
             impact = ev["impact"]
             title = ev["title"]
             currency = ev["currency"]
-
             if mins > 0:
                 if mins >= 60:
-                    hours = mins // 60
-                    rem = mins % 60
-                    if rem > 0:
-                        time_str = f"{hours}h{rem}m away"
-                    else:
-                        time_str = f"{hours}h away"
+                    h = mins // 60
+                    m = mins % 60
+                    time_str = f"{h}h{m}m away" if m else f"{h}h away"
                 else:
                     time_str = f"{mins}m away"
             elif mins < 0:
                 time_str = f"{abs(mins)}m ago"
             else:
                 time_str = "NOW"
-
-            if impact == "High":
-                emoji = "\U0001f534"
-            elif impact == "Medium":
-                emoji = "\U0001f7e1"
-            else:
-                emoji = "\u26aa"
-
+            emoji = "\U0001f534" if impact == "High" else "\U0001f7e1" if impact == "Medium" else "\u26aa"
             lines.append(f"  {emoji} {title} ({currency}) \u2014 {time_str}")
 
-        # Overall risk assessment
+        risk_level, _, reason = check_news_risk(epic)
         risk_emojis = {"blocked": "\U0001f534", "caution": "\U0001f7e1", "clear": "\U0001f7e2"}
-        risk_emoji = risk_emojis.get(risk_level, "\U0001f7e2")
         risk_labels = {"blocked": "HIGH", "caution": "MEDIUM", "clear": "LOW"}
+        risk_emoji = risk_emojis.get(risk_level, "\U0001f7e2")
         risk_label = risk_labels.get(risk_level, "LOW")
-
         advice = ""
         if risk_level == "blocked":
             advice = " \u2014 consider closing or tightening SL"
         elif risk_level == "caution":
             advice = " \u2014 monitor closely"
-
         lines.append(f"  \U0001f4ca News Risk: {risk_emoji} {risk_label}{advice}")
 
     except ImportError:
@@ -111,14 +92,23 @@ def _get_news_section(epic):
         lines.append("  \u26a0\ufe0f News filter not installed")
     except Exception as e:
         logger.warning("News section error for %s: %s", epic, e)
-        lines.append("  \u2500\u2500\u2500 News Risk \u2500\u2500\u2500")
-        lines.append(f"  \u26a0\ufe0f Error: {e}")
-
     return lines
 
 
+def _get_structure_section(client, epic, direction, entry_price):
+    """Get market structure validity section."""
+    try:
+        from structure_checker import get_structure_status_for_validate
+        return get_structure_status_for_validate(client, epic, direction, entry_price)
+    except ImportError:
+        return ["  \u2500\u2500\u2500 Structure \u2500\u2500\u2500", "  \u26a0\ufe0f Structure checker not installed"]
+    except Exception as e:
+        logger.warning("Structure check error for %s: %s", epic, e)
+        return ["  \u2500\u2500\u2500 Structure \u2500\u2500\u2500", f"  \u26a0\ufe0f Error: {e}"]
+
+
 async def validate_cmd(update, context):
-    """Validate open trades - checks API positions + DB trades + news risk."""
+    """Validate open trades - health + news risk + structure check."""
     try:
         import telegram_bot as _tb
         client = _tb._client
@@ -170,7 +160,12 @@ async def validate_cmd(update, context):
             conf = db_match.get("confluence", "?")
             lines.append(f"  Conf: {conf} | MSS: {mss}" + (f" | Inv: {inv}" if inv else ""))
 
-        # News risk section per instrument
+        # Structure check (re-analyzes chart)
+        if client:
+            struct_lines = _get_structure_section(client, epic, d, entry)
+            lines.extend(struct_lines)
+
+        # News risk section
         news_lines = _get_news_section(epic)
         lines.extend(news_lines)
         lines.append("")
