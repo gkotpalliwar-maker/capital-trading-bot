@@ -16,10 +16,10 @@ async def trailing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
       - Persists state to data/trailing_state.json
 
     Usage:
-      /trailing         — show trailing status of all positions
-      /trailing on      — enable bot-side trailing
-      /trailing off     — disable bot-side trailing
-      /trailing now     — force immediate trailing update
+      /trailing         - show trailing status of all positions
+      /trailing on      - enable bot-side trailing
+      /trailing off     - disable bot-side trailing
+      /trailing now     - force immediate trailing update
     """
     try:
         import telegram_bot as _tb
@@ -39,24 +39,21 @@ async def trailing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # If no args, show status
         if not args:
             enabled = bot_trailing.TRAILING_ENABLED
+            status_emoji = "\u2705 ENABLED" if enabled else "\U0001f534 DISABLED"
             header = (
-                f"\U0001f4cf <b>Bot-Side Trailing Stop</b>\n"
-                f"Status: {\'\u2705 ENABLED\' if enabled else \'\U0001f534 DISABLED\'}\n"
-                f"Breakeven trigger: {bot_trailing.BREAKEVEN_TRIGGER_R}R\n"
-                f"Trail start: {bot_trailing.TRAIL_START_R}R\n"
-                f"Trail distance: {bot_trailing.TRAIL_DISTANCE_ATR}x risk\n"
+                "\U0001f4cf <b>Bot-Side Trailing Stop</b>\n"
+                "Status: " + status_emoji + "\n"
+                "Breakeven trigger: " + str(bot_trailing.BREAKEVEN_TRIGGER_R) + "R\n"
+                "Trail start: " + str(bot_trailing.TRAIL_START_R) + "R\n"
+                "Trail distance: " + str(bot_trailing.TRAIL_DISTANCE_ATR) + "x risk\n"
             )
 
             if not positions:
                 await update.message.reply_html(header + "\nNo open positions.")
                 return
 
-            # Get trailing state from the scanner's trailing_manager if available
-            trailing_state = {}
-            try:
-                trailing_state = _get_trailing_state()
-            except Exception:
-                pass
+            # Get trailing state from JSON file
+            trailing_state = _get_trailing_state()
 
             lines = [header, ""]
             for p in positions:
@@ -78,30 +75,30 @@ async def trailing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pnl = (current - entry) if direction == "BUY" else (entry - current)
                 current_r = pnl / risk if risk > 0 else 0
 
-                lines.append(f"{de} <b>{epic} {direction}</b>")
-                lines.append(f"  Entry: {entry:.5f} | SL: {sl:.5f}")
-                lines.append(f"  Current: {current:.5f} | P&L: {current_r:.2f}R")
+                lines.append(de + " <b>" + epic + " " + direction + "</b>")
+                lines.append("  Entry: %.5f | SL: %.5f" % (entry, sl))
+                lines.append("  Current: %.5f | P&L: %.2fR" % (current, current_r))
 
                 # Show trailing state
                 state = trailing_state.get(deal_id, {})
                 if state:
                     be = "\u2705" if state.get("breakeven_hit") else "\u23f3"
                     tr = "\u2705" if state.get("trailing_active") else "\u23f3"
-                    lines.append(f"  Breakeven: {be} | Trail: {tr}")
+                    lines.append("  Breakeven: " + be + " | Trail: " + tr)
                     if state.get("trailing_active"):
                         peak = state.get("highest") if direction == "BUY" else state.get("lowest")
                         if peak:
-                            lines.append(f"  Peak: {peak:.5f}")
+                            lines.append("  Peak: %.5f" % peak)
                 else:
                     if current_r < bot_trailing.BREAKEVEN_TRIGGER_R:
-                        lines.append(f"  \u23f3 Waiting for {bot_trailing.BREAKEVEN_TRIGGER_R}R for breakeven")
+                        lines.append("  \u23f3 Waiting for %.1fR for breakeven" % bot_trailing.BREAKEVEN_TRIGGER_R)
                     else:
-                        lines.append(f"  \u2705 Above breakeven trigger")
+                        lines.append("  \u2705 Above breakeven trigger")
                 lines.append("")
 
-            lines.append("\U0001f527 /trailing on — enable")
-            lines.append("\U0001f527 /trailing off — disable")
-            lines.append("\U0001f527 /trailing now — force update")
+            lines.append("\U0001f527 /trailing on \u2014 enable")
+            lines.append("\U0001f527 /trailing off \u2014 disable")
+            lines.append("\U0001f527 /trailing now \u2014 force update")
             await update.message.reply_html("\n".join(lines))
             return
 
@@ -114,27 +111,29 @@ async def trailing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Also update .env for persistence across restarts
             _update_env("TRAILING_STOP_ENABLED", "true" if enable else "false")
 
-            msg = f"\U0001f4cf <b>Trailing {'ENABLED' if enable else 'DISABLED'}</b>\n"
+            state_word = "ENABLED" if enable else "DISABLED"
+            msg = "\U0001f4cf <b>Trailing " + state_word + "</b>\n"
             if enable and positions:
                 # Run immediate update
                 try:
                     tm = bot_trailing.TrailingManager(client)
                     updates = tm.update_all()
                     if updates:
-                        msg += f"\n\u2705 Immediate update: {len(updates)} SL(s) moved\n"
+                        msg += "\n\u2705 Immediate update: %d SL(s) moved\n" % len(updates)
                         for u in updates:
-                            msg += f"  \u2022 {u['deal_id'][:12]}... SL\u2192{u['new_sl']:.5f} ({u['reason']})\n"
+                            msg += "  \u2022 %s... SL\u2192%.5f (%s)\n" % (
+                                u["deal_id"][:12], u["new_sl"], u["reason"])
                     else:
                         msg += "\n\u2139\ufe0f No positions need SL updates yet"
                         if positions:
-                            msg += f" ({len(positions)} open)"
+                            msg += " (%d open)" % len(positions)
                 except Exception as e:
-                    msg += f"\n\u26a0\ufe0f Update error: {e}"
+                    msg += "\n\u26a0\ufe0f Update error: %s" % str(e)
             elif not positions:
                 msg += "No open positions."
 
-            msg += f"\n\nBreakeven at: {bot_trailing.BREAKEVEN_TRIGGER_R}R"
-            msg += f"\nTrail start: {bot_trailing.TRAIL_START_R}R"
+            msg += "\n\nBreakeven at: %.1fR" % bot_trailing.BREAKEVEN_TRIGGER_R
+            msg += "\nTrail start: %.1fR" % bot_trailing.TRAIL_START_R
             await update.message.reply_html(msg)
             return
 
@@ -149,28 +148,28 @@ async def trailing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tm = bot_trailing.TrailingManager(client)
                 updates = tm.update_all()
                 if updates:
-                    lines = [f"\U0001f4cf <b>Trailing Update</b>\n"]
+                    lines = ["\U0001f4cf <b>Trailing Update</b>\n"]
                     for u in updates:
                         lines.append(
-                            f"\u2705 {u['deal_id'][:12]}... SL\u2192{u['new_sl']:.5f}"
-                            f" ({u['reason']})")
+                            "\u2705 %s... SL\u2192%.5f (%s)" % (
+                                u["deal_id"][:12], u["new_sl"], u["reason"]))
                     await update.message.reply_html("\n".join(lines))
                 else:
                     await update.message.reply_text(
-                        f"\u2139\ufe0f No SL updates needed ({len(positions)} positions)")
+                        "\u2139\ufe0f No SL updates needed (%d positions)" % len(positions))
             except Exception as e:
-                await update.message.reply_text(f"\u274c Update error: {e}")
+                await update.message.reply_text("\u274c Update error: %s" % str(e))
             return
 
         await update.message.reply_text(
             "Usage: /trailing [on|off|now]\n"
-            "  on  — enable bot-side trailing\n"
-            "  off — disable\n"
-            "  now — force immediate SL update")
+            "  on  \u2014 enable bot-side trailing\n"
+            "  off \u2014 disable\n"
+            "  now \u2014 force immediate SL update")
 
     except Exception as e:
         logger.error("Trailing cmd error: %s", e)
-        await update.message.reply_text(f"\u274c Error: {e}")
+        await update.message.reply_text("\u274c Error: %s" % str(e))
 
 
 def _get_trailing_state():
@@ -184,7 +183,7 @@ def _get_trailing_state():
     return {}
 
 
-def _update_env(key: str, value: str):
+def _update_env(key, value):
     """Update a key in .env file (create if missing)."""
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     try:
@@ -193,14 +192,14 @@ def _update_env(key: str, value: str):
         if os.path.exists(env_path):
             with open(env_path) as f:
                 for line in f:
-                    if line.strip().startswith(f"{key}="):
-                        lines.append(f"{key}={value}\n")
+                    if line.strip().startswith(key + "="):
+                        lines.append(key + "=" + value + "\n")
                         found = True
                     else:
                         lines.append(line)
         if not found:
-            lines.append(f"{key}={value}\n")
+            lines.append(key + "=" + value + "\n")
         with open(env_path, "w") as f:
             f.writelines(lines)
     except Exception as e:
-        logger.warning(f"Failed to update .env: {e}")
+        logger.warning("Failed to update .env: %s", e)
