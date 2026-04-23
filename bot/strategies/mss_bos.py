@@ -1,6 +1,6 @@
 """MSS/BOS Detection + Enhanced SMC/ICT Signal Filter.
 
-v2.7.0: Fixed SL/TP swap + stronger MSS confirmation.
+v2.7.1: Fixed SL/TP swap + stronger MSS confirmation + swing_lookback=3.
 
 Changes from v2.3.0:
   - risk <= 0 validation prevents zone-on-wrong-side SL/TP swap
@@ -16,7 +16,7 @@ logger = logging.getLogger("mss_bos")
 
 """MSS/BOS Detection + Enhanced SMC/ICT Signal Filter.
 
-v2.7.0: Fixed SL/TP swap + stronger MSS confirmation.
+v2.7.1: Fixed SL/TP swap + stronger MSS confirmation + swing_lookback=3.
 """
 import types as _types
 import logging
@@ -24,14 +24,14 @@ import logging
 logger = logging.getLogger("mss_bos")
 
 
-def detect_market_structure_shift(df, swing_lookback=5, max_age=30):
+def detect_market_structure_shift(df, swing_lookback=3, max_age=30):
     """
     Detect Market Structure Shifts (reversals) and Breaks of Structure (continuations).
 
     v2.7.0 improvements:
       - Break candle must have body > 50% of range (no wick-dominated closes)
       - Break candle body must exceed 0.3 * ATR (meaningful move, not noise)
-      - For H4+: swing_lookback auto-adjusts (min 5 for M15, 7 for H1/H4)
+      - swing_lookback default changed to 3 (backtested on 1000 candles)
     """
     import pandas as pd
     events = []
