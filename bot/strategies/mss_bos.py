@@ -139,6 +139,16 @@ def detect_market_structure_shift(df, swing_lookback=5, max_age=30):
     return [e for e in events if e["index"] >= len(df) - max_age]
 
 
+
+def best_mss(events):
+    """Pick the best MSS/BOS event: prefer reversals, then most recent.
+    Exported at module level for import by smc_ict.py.
+    """
+    if not events:
+        return None, 0
+    s = sorted(events, key=lambda e: (e["is_reversal"], e["index"]), reverse=True)
+    return s[0], 3 if s[0]["is_reversal"] else 2
+
 # ============================================================
 # MSS-ENHANCED SIGNAL GENERATION (replaces base generate_signals)
 # v2.7.0: Added risk > 0 validation to prevent SL/TP swap
