@@ -1,167 +1,141 @@
 #!/usr/bin/env python3
-"""v2.8.0 Patcher: Integrate signal guardrails into scanner.py
+"""v2.8.0 FINAL Patcher: Exact string replacement on scanner.py"""
+import os, sys
 
-This patcher:
-1. Adds import for MarketIntelligence and SignalGuardrails
-2. Initializes intel + guardrails after client setup
-3. Wraps signal generation with guardrail evaluation
-4. Installs tradingview-ta if missing
-"""
-import os
-import sys
-import subprocess
-
-print("v2.8.0 Smart Signals Patcher")
+print("v2.8.0 Smart Signals Patcher (FINAL)")
 print("=" * 55)
 
-# Install tradingview-ta if missing
-try:
-    import tradingview_ta
-    print(f"  tradingview-ta: already installed (v{tradingview_ta.__version__})")
-except ImportError:
-    print("  Installing tradingview-ta...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "tradingview-ta", "-q"])
-    print("  tradingview-ta installed")
-
-# Patch scanner.py
 scanner_path = os.path.join(os.getcwd(), "bot", "scanner.py")
 if not os.path.exists(scanner_path):
     print(f"  ERROR: {scanner_path} not found")
     sys.exit(1)
 
 with open(scanner_path) as f:
-    lines = f.readlines()
+    code = f.read()
 
-orig_code = "".join(lines)
+orig = code
 changes = []
 
-# 1) Find last "from bot." import line and add guardrails import after it
-if "signal_guardrails" not in orig_code:
-    last_bot_import_idx = -1
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("from bot.") or stripped.startswith("import bot."):
-            last_bot_import_idx = i
+# ================================================================
+# 1) Add import + init AFTER "    check_news_risk = None"
+#    This is the last import fallback at module level (~line 38)
+#    Uses DIRECT imports (not from bot.xxx) matching scanner.py style
+# ================================================================
 
-    import_block = [
-        "\n",
-        "# v2.8.0: Smart signal intelligence\n",
-        "try:\n",
-        "    from bot.market_intelligence import MarketIntelligence\n",
-        "    from bot.signal_guardrails import SignalGuardrails\n",
-        "    HAS_GUARDRAILS = True\n",
-        "except ImportError as e:\n",
-        "    logger.warning(f\"Guardrails not available: {e}\")\n",
-        "    HAS_GUARDRAILS = False\n",
-        "\n",
-    ]
+IMPORT_ANCHOR = "    check_news_risk = None"
 
-    if last_bot_import_idx >= 0:
-        for j, imp_line in enumerate(import_block):
-            lines.insert(last_bot_import_idx + 1 + j, imp_line)
-        changes.append(f"Added guardrails imports after line {last_bot_import_idx + 1}")
-    else:
-        # Fallback: add after "import logging"
-        for i, line in enumerate(lines):
-            if "import logging" in line:
-                for j, imp_line in enumerate(import_block):
-                    lines.insert(i + 1 + j, imp_line)
-                changes.append("Added guardrails imports after import logging")
-                break
+IMPORT_REPLACEMENT = """    check_news_risk = None
 
-# 2) Find scanning loop and add guardrails initialization before it
-code_so_far = "".join(lines)
-if "_guardrails" not in code_so_far:
-    init_block = [
-        "\n",
-        "    # v2.8.0: Initialize smart signal guardrails\n",
-        "    if HAS_GUARDRAILS:\n",
-        "        _intel = MarketIntelligence()\n",
-        "        _guardrails = SignalGuardrails(market_intel=_intel)\n",
-        "        logger.info(\"Smart signal guardrails initialized\")\n",
-        "    else:\n",
-        "        _intel = None\n",
-        "        _guardrails = None\n",
-        "\n",
-    ]
-
-    inserted = False
-    for i, line in enumerate(lines):
-        if "while True:" in line and not line.strip().startswith("#"):
-            for j, init_line in enumerate(init_block):
-                lines.insert(i + j, init_line)
-            changes.append(f"Added guardrails initialization before line {i + 1}")
-            inserted = True
-            break
-    if not inserted:
-        changes.append("WARNING: Could not find scanner loop — manual init needed")
-
-# 3) Find signal notification section and add guardrail check
-code_so_far = "".join(lines)
-if "guardrail_score" not in code_so_far:
-    # Look for the line where signals are iterated
-    guard_block = [
-        "\n",
-        "                # v2.8.0: Guardrail evaluation\n",
-        "                if HAS_GUARDRAILS and _guardrails is not None:\n",
-        "                    try:\n",
-        "                        _eval = _guardrails.evaluate_signal(\n",
-        "                            df=df, instrument=inst_key, direction=sig.direction,\n",
-        "                            timeframe=tf\n",
-        "                        )\n",
-        "                        sig.metadata[\"guardrail_score\"] = _eval[\"final_score\"]\n",
-        "                        sig.metadata[\"guardrail_quality\"] = _eval[\"quality\"]\n",
-        "                        sig.metadata[\"guardrail_text\"] = _eval[\"telegram_text\"]\n",
-        "                        if not _eval[\"passed\"]:\n",
-        "                            logger.info(f\"Signal BLOCKED: {inst_key} {tf} {sig.direction} \"\n",
-        "                                       f\"(score:{_eval['final_score']}, blocks:{_eval['hard_blocks']})\")\n",
-        "                            continue\n",
-        "                        else:\n",
-        "                            logger.info(f\"Signal PASSED: {inst_key} {tf} {sig.direction} \"\n",
-        "                                       f\"(score:{_eval['final_score']}, quality:{_eval['quality']})\")\n",
-        "                    except Exception as e:\n",
-        "                        logger.error(f\"Guardrail error: {e}\")\n",
-        "\n",
-    ]
-
-    inserted = False
-    for i, line in enumerate(lines):
-        # Look for "for sig in" pattern inside signal processing
-        if "for sig in" in line and ("signals" in line or "smc_signal" in line):
-            for j, g_line in enumerate(guard_block):
-                lines.insert(i + 1 + j, g_line)
-            changes.append(f"Added guardrail check after line {i + 1}")
-            inserted = True
-            break
-    if not inserted:
-        changes.append("WARNING: Could not find signal loop — manual guardrail wiring needed")
-
-# Verify syntax
-new_code = "".join(lines)
+# v2.8.0: Smart signal intelligence
 try:
-    compile(new_code, scanner_path, "exec")
+    from market_intelligence import MarketIntelligence
+    from signal_guardrails import SignalGuardrails
+    _intel = MarketIntelligence()
+    _guardrails = SignalGuardrails(market_intel=_intel)
+    HAS_GUARDRAILS = True
+    logger.info("Smart signal guardrails initialized")
+except ImportError as e:
+    logger.warning(f"Guardrails not available: {e}")
+    HAS_GUARDRAILS = False
+    _guardrails = None"""
+
+if IMPORT_ANCHOR in code and "signal_guardrails" not in code:
+    code = code.replace(IMPORT_ANCHOR, IMPORT_REPLACEMENT, 1)
+    changes.append("Added guardrails import + init after news_filter fallback")
+elif "signal_guardrails" in code:
+    changes.append("Guardrails import already present (skipped)")
+else:
+    changes.append("WARNING: Could not find import anchor")
+
+# ================================================================
+# 2) Add guardrail check inside signal loop
+#    AFTER "for sig in signals:" (16 spaces indent)
+#    BEFORE "zt = sig.metadata.get(...)" (20 spaces indent)
+# ================================================================
+
+LOOP_OLD = '                for sig in signals:\n                    zt = sig.metadata.get("zone_types", "")'
+
+LOOP_NEW = """                for sig in signals:
+                    # v2.8.0: Guardrail evaluation
+                    if HAS_GUARDRAILS and _guardrails is not None:
+                        try:
+                            _eval = _guardrails.evaluate_signal(
+                                df=df, instrument=inst, direction=sig.direction,
+                                timeframe=tf
+                            )
+                            sig.metadata["guardrail_score"] = _eval["final_score"]
+                            sig.metadata["guardrail_quality"] = _eval["quality"]
+                            sig.metadata["guardrail_text"] = _eval["telegram_text"]
+                            if not _eval["passed"]:
+                                logger.info("Signal BLOCKED: %s %s %s (score:%s)"
+                                           % (inst, tf, sig.direction, _eval["final_score"]))
+                                continue
+                            else:
+                                logger.info("Signal PASSED: %s %s %s (score:%s, quality:%s)"
+                                           % (inst, tf, sig.direction, _eval["final_score"], _eval["quality"]))
+                        except Exception as _ge:
+                            logger.error("Guardrail error: %s" % _ge)
+
+                    zt = sig.metadata.get("zone_types", "")"""
+
+if LOOP_OLD in code and "guardrail_score" not in code:
+    code = code.replace(LOOP_OLD, LOOP_NEW, 1)
+    changes.append("Added guardrail check in signal loop")
+elif "guardrail_score" in code:
+    changes.append("Guardrail check already present (skipped)")
+else:
+    changes.append("WARNING: Could not find signal loop anchor")
+
+# ================================================================
+# 3) Add guardrail data to sig_data dict
+#    AFTER: sig_data["regime"] = regime.get("label", "")
+# ================================================================
+
+SIGDATA_OLD = '                    sig_data["regime"] = regime.get("label", "")'
+
+SIGDATA_NEW = """                    sig_data["regime"] = regime.get("label", "")
+
+                    # v2.8.0: Attach guardrail data
+                    if sig.metadata.get("guardrail_score") is not None:
+                        sig_data["guardrail_score"] = sig.metadata["guardrail_score"]
+                        sig_data["guardrail_quality"] = sig.metadata["guardrail_quality"]
+                        sig_data["guardrail_text"] = sig.metadata["guardrail_text"]"""
+
+if SIGDATA_OLD in code and "guardrail_quality" not in code:
+    code = code.replace(SIGDATA_OLD, SIGDATA_NEW, 1)
+    changes.append("Added guardrail data to sig_data dict")
+elif "guardrail_quality" in code:
+    changes.append("Guardrail sig_data already present (skipped)")
+
+# ================================================================
+# VERIFY + WRITE
+# ================================================================
+
+try:
+    compile(code, scanner_path, "exec")
     print("  \u2705 scanner.py compiles after patching")
 except SyntaxError as e:
-    print(f"  \u274c Syntax error after patching: {e}")
-    print(f"  Reverting to original...")
-    new_code = orig_code
-    changes = ["REVERTED — syntax error"]
+    print(f"  \u274c Syntax error: {e}")
+    print("  Reverting...")
+    code = orig
+    changes = ["REVERTED due to syntax error"]
 
-# Write
-if new_code != orig_code:
+if code != orig:
     with open(scanner_path + ".v2.7.2.bak", "w") as f:
-        f.write(orig_code)
-    print(f"  Backed up original to scanner.py.v2.7.2.bak")
-
+        f.write(orig)
+    print("  Backed up to scanner.py.v2.7.2.bak")
     with open(scanner_path, "w") as f:
-        f.write(new_code)
-    print(f"  scanner.py updated with {len(changes)} changes:")
+        f.write(code)
+    print(f"  scanner.py updated ({len(changes)} changes):")
     for c in changes:
         print(f"    - {c}")
 else:
-    print("  No changes needed (already patched or reverted)")
+    if changes:
+        for c in changes:
+            print(f"    {c}")
+    else:
+        print("  No changes needed")
 
 print()
 print("=" * 55)
-print("v2.8.0 patcher complete.")
-print("Run: sudo systemctl restart trading-bot")
+print("Done. Run: sudo systemctl restart trading-bot")
