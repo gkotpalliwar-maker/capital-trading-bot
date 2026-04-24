@@ -18,39 +18,41 @@ async def intel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args if context.args else []
 
         if not args:
-            # Show all instruments summary
             lines = ["<b>Market Intelligence Summary</b>", ""]
             instruments = ["gold", "crude", "eurusd", "gbpusd", "usdjpy"]
             last_date = None
             for inst in instruments:
                 cot = intel.fetch_cot_data(inst)
                 if cot:
-                    if "BULLISH" in cot["bias"]:
-                        emoji = "\U0001f7e2"
-                    elif "BEARISH" in cot["bias"]:
-                        emoji = "\U0001f534"
+                    bias = cot["bias"]
+                    if "BULLISH" in bias:
+                        tag = "[BULL]"
+                    elif "BEARISH" in bias:
+                        tag = "[BEAR]"
                     else:
-                        emoji = "\u26aa"
+                        tag = "[NEUT]"
                     spec_net = cot["large_spec_net"]
                     momentum = cot["spec_momentum"]
-                    lines.append(f"{emoji} <b>{inst.upper()}</b>: {cot['bias']}")
-                    lines.append(f"   Specs {cot['spec_direction']} {spec_net:+,} ({momentum})")
+                    lines.append(f"{tag} <b>{inst.upper()}</b>: {bias}")
+                    lines.append(f"    Specs {cot['spec_direction']} {spec_net:+,} ({momentum})")
                     last_date = cot.get("report_date", "")
                 else:
-                    lines.append(f"\u26aa <b>{inst.upper()}</b>: COT unavailable")
+                    lines.append(f"[--] <b>{inst.upper()}</b>: COT unavailable")
 
             fg = intel.fetch_fear_greed()
             if fg:
-                lines.append(f"")
-                lines.append(f"Fear & Greed: {fg['value']} ({fg['classification']})")
+                lines.append("")
+                val = fg["value"]
+                cls = fg["classification"]
+                lines.append(f"Fear and Greed: {val} ({cls})")
 
             if last_date:
-                lines.append(f"")
+                lines.append("")
                 lines.append(f"COT report: {str(last_date)[:10]}")
 
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            text = "\n".join(lines)
+            await update.message.reply_text(text, parse_mode="HTML")
         else:
-            # Show full report for specific instrument
             inst = args[0].lower()
             tf = args[1].upper() if len(args) > 1 else "H4"
             report = intel.get_full_report(inst, tf)
@@ -58,7 +60,7 @@ async def intel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode="HTML")
 
     except ImportError:
-        await update.message.reply_text("Market intelligence not installed.")
+        await update.message.reply_text("Market intelligence module not installed.")
     except Exception as e:
         logger.error(f"Intel command error: {e}")
         await update.message.reply_text(f"Error: {e}")
