@@ -5,18 +5,16 @@ This patcher:
 1. Adds import for MarketIntelligence and SignalGuardrails
 2. Initializes intel + guardrails after client setup
 3. Wraps signal generation with guardrail evaluation
-4. Adds guardrail summary to Telegram notifications
-5. Installs tradingview-ta if missing
+4. Installs tradingview-ta if missing
 """
 import os
-import re
 import sys
 import subprocess
 
 print("v2.8.0 Smart Signals Patcher")
 print("=" * 55)
 
-# ── Install tradingview-ta if missing ──
+# Install tradingview-ta if missing
 try:
     import tradingview_ta
     print(f"  tradingview-ta: already installed (v{tradingview_ta.__version__})")
@@ -25,155 +23,145 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "tradingview-ta", "-q"])
     print("  tradingview-ta installed")
 
-# ── Patch scanner.py ──
+# Patch scanner.py
 scanner_path = os.path.join(os.getcwd(), "bot", "scanner.py")
 if not os.path.exists(scanner_path):
     print(f"  ERROR: {scanner_path} not found")
     sys.exit(1)
 
 with open(scanner_path) as f:
-    code = f.read()
+    lines = f.readlines()
 
-orig = code
+orig_code = "".join(lines)
 changes = []
 
-# 1) Add imports after existing bot imports
-import_block = """
-# v2.8.0: Smart signal intelligence
-try:
-    from bot.market_intelligence import MarketIntelligence
-    from bot.signal_guardrails import SignalGuardrails
-    HAS_GUARDRAILS = True
-except ImportError as e:
-    logger.warning(f"Guardrails not available: {e}")
-    HAS_GUARDRAILS = False
-"""
+# 1) Find last "from bot." import line and add guardrails import after it
+if "signal_guardrails" not in orig_code:
+    last_bot_import_idx = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("from bot.") or stripped.startswith("import bot."):
+            last_bot_import_idx = i
 
-if "signal_guardrails" not in code:
-    # Insert after the last "from bot." import line
-    # Find all "from bot." import lines
-    last_bot_import = None
-    for m in re.finditer(r"^(?:from bot\.|import bot\.)[^
-]+$", code, re.MULTILINE):
-        last_bot_import = m
+    import_block = [
+        "\n",
+        "# v2.8.0: Smart signal intelligence\n",
+        "try:\n",
+        "    from bot.market_intelligence import MarketIntelligence\n",
+        "    from bot.signal_guardrails import SignalGuardrails\n",
+        "    HAS_GUARDRAILS = True\n",
+        "except ImportError as e:\n",
+        "    logger.warning(f\"Guardrails not available: {e}\")\n",
+        "    HAS_GUARDRAILS = False\n",
+        "\n",
+    ]
 
-    if last_bot_import:
-        insert_pos = last_bot_import.end()
-        code = code[:insert_pos] + import_block + code[insert_pos:]
-        changes.append("Added guardrails imports")
+    if last_bot_import_idx >= 0:
+        for j, imp_line in enumerate(import_block):
+            lines.insert(last_bot_import_idx + 1 + j, imp_line)
+        changes.append(f"Added guardrails imports after line {last_bot_import_idx + 1}")
     else:
         # Fallback: add after "import logging"
-        code = code.replace("import logging", "import logging" + import_block, 1)
-        changes.append("Added guardrails imports (after logging)")
+        for i, line in enumerate(lines):
+            if "import logging" in line:
+                for j, imp_line in enumerate(import_block):
+                    lines.insert(i + 1 + j, imp_line)
+                changes.append("Added guardrails imports after import logging")
+                break
 
-# 2) Initialize intel + guardrails
-# Look for where client is initialized (after Capital.com login)
-init_block = """
-    # v2.8.0: Initialize smart signal guardrails
-    if HAS_GUARDRAILS:
-        _intel = MarketIntelligence()
-        _guardrails = SignalGuardrails(market_intel=_intel)
-        logger.info("Smart signal guardrails initialized")
-    else:
-        _intel = None
-        _guardrails = None
-"""
-
-if "_guardrails" not in code:
-    # Insert after "client = " or scanner init
-    # Look for where scanning loop starts
-    scanner_init_patterns = [
-        r"(\s+logger\.info\([^)]*[Ss]canning[^)]*\))",
-        r"(\s+logger\.info\([^)]*[Ss]tarting[^)]*\))",
-        r"(\s+while\s+True:)",
+# 2) Find scanning loop and add guardrails initialization before it
+code_so_far = "".join(lines)
+if "_guardrails" not in code_so_far:
+    init_block = [
+        "\n",
+        "    # v2.8.0: Initialize smart signal guardrails\n",
+        "    if HAS_GUARDRAILS:\n",
+        "        _intel = MarketIntelligence()\n",
+        "        _guardrails = SignalGuardrails(market_intel=_intel)\n",
+        "        logger.info(\"Smart signal guardrails initialized\")\n",
+        "    else:\n",
+        "        _intel = None\n",
+        "        _guardrails = None\n",
+        "\n",
     ]
+
     inserted = False
-    for pattern in scanner_init_patterns:
-        m = re.search(pattern, code)
-        if m:
-            code = code[:m.start()] + init_block + code[m.start():]
-            changes.append("Added guardrails initialization")
+    for i, line in enumerate(lines):
+        if "while True:" in line and not line.strip().startswith("#"):
+            for j, init_line in enumerate(init_block):
+                lines.insert(i + j, init_line)
+            changes.append(f"Added guardrails initialization before line {i + 1}")
             inserted = True
             break
     if not inserted:
-        changes.append("WARNING: Could not find scanner init point — manual init needed")
+        changes.append("WARNING: Could not find scanner loop — manual init needed")
 
-# 3) Add guardrail check in signal flow
-# This wraps the signal notification/execution
-guardrail_check = """
-            # v2.8.0: Guardrail evaluation
-            if HAS_GUARDRAILS and _guardrails is not None:
-                try:
-                    _eval = _guardrails.evaluate_signal(
-                        df=df, instrument=inst_key, direction=sig.direction,
-                        timeframe=tf
-                    )
-                    sig.metadata["guardrail_score"] = _eval["final_score"]
-                    sig.metadata["guardrail_quality"] = _eval["quality"]
-                    sig.metadata["guardrail_passed"] = _eval["passed"]
-
-                    # Attach intel report if available
-                    if _intel is not None:
-                        _report = _intel.get_full_report(inst_key, tf, df=df)
-                        sig.metadata["intel_report"] = _intel.format_telegram(_report, sig.direction)
-
-                    if not _eval["passed"]:
-                        logger.info(f"Signal BLOCKED by guardrails: {inst_key} {tf} {sig.direction} "
-                                   f"(score: {_eval['final_score']}, blocks: {_eval['hard_blocks']})")
-                        # Add guardrail text to the signal for transparency
-                        sig.metadata["guardrail_text"] = _eval["telegram_text"]
-                        # Skip execution but still notify (with BLOCKED label)
-                        continue
-                    else:
-                        sig.metadata["guardrail_text"] = _eval["telegram_text"]
-                        logger.info(f"Signal PASSED guardrails: {inst_key} {tf} {sig.direction} "
-                                   f"(score: {_eval['final_score']}, quality: {_eval['quality']})")
-                except Exception as e:
-                    logger.error(f"Guardrail evaluation error: {e}")
-                    # On error, let signal through (fail-open)
-"""
-
-if "guardrail_score" not in code:
-    # Find the signal processing section — look for where signals are iterated
-    signal_patterns = [
-        r"(\s+for sig in (?:signals|smc_signals|all_signals)[^:]*:)",
-        r"(\s+if sig\.direction)",
+# 3) Find signal notification section and add guardrail check
+code_so_far = "".join(lines)
+if "guardrail_score" not in code_so_far:
+    # Look for the line where signals are iterated
+    guard_block = [
+        "\n",
+        "                # v2.8.0: Guardrail evaluation\n",
+        "                if HAS_GUARDRAILS and _guardrails is not None:\n",
+        "                    try:\n",
+        "                        _eval = _guardrails.evaluate_signal(\n",
+        "                            df=df, instrument=inst_key, direction=sig.direction,\n",
+        "                            timeframe=tf\n",
+        "                        )\n",
+        "                        sig.metadata[\"guardrail_score\"] = _eval[\"final_score\"]\n",
+        "                        sig.metadata[\"guardrail_quality\"] = _eval[\"quality\"]\n",
+        "                        sig.metadata[\"guardrail_text\"] = _eval[\"telegram_text\"]\n",
+        "                        if not _eval[\"passed\"]:\n",
+        "                            logger.info(f\"Signal BLOCKED: {inst_key} {tf} {sig.direction} \"\n",
+        "                                       f\"(score:{_eval['final_score']}, blocks:{_eval['hard_blocks']})\")\n",
+        "                            continue\n",
+        "                        else:\n",
+        "                            logger.info(f\"Signal PASSED: {inst_key} {tf} {sig.direction} \"\n",
+        "                                       f\"(score:{_eval['final_score']}, quality:{_eval['quality']})\")\n",
+        "                    except Exception as e:\n",
+        "                        logger.error(f\"Guardrail error: {e}\")\n",
+        "\n",
     ]
-    for pattern in signal_patterns:
-        m = re.search(pattern, code)
-        if m:
-            # Insert guardrail check right after the for loop starts
-            insert_at = m.end()
-            code = code[:insert_at] + guardrail_check + code[insert_at:]
-            changes.append("Added guardrail evaluation in signal loop")
-            break
 
-# 4) Verify syntax
+    inserted = False
+    for i, line in enumerate(lines):
+        # Look for "for sig in" pattern inside signal processing
+        if "for sig in" in line and ("signals" in line or "smc_signal" in line):
+            for j, g_line in enumerate(guard_block):
+                lines.insert(i + 1 + j, g_line)
+            changes.append(f"Added guardrail check after line {i + 1}")
+            inserted = True
+            break
+    if not inserted:
+        changes.append("WARNING: Could not find signal loop — manual guardrail wiring needed")
+
+# Verify syntax
+new_code = "".join(lines)
 try:
-    compile(code, scanner_path, "exec")
-    print("  ✅ scanner.py compiles after patching")
+    compile(new_code, scanner_path, "exec")
+    print("  \u2705 scanner.py compiles after patching")
 except SyntaxError as e:
-    print(f"  ❌ Syntax error after patching: {e}")
+    print(f"  \u274c Syntax error after patching: {e}")
     print(f"  Reverting to original...")
-    code = orig
+    new_code = orig_code
     changes = ["REVERTED — syntax error"]
 
-# ── Write ──
-if code != orig:
-    # Backup
+# Write
+if new_code != orig_code:
     with open(scanner_path + ".v2.7.2.bak", "w") as f:
-        f.write(orig)
+        f.write(orig_code)
     print(f"  Backed up original to scanner.py.v2.7.2.bak")
 
     with open(scanner_path, "w") as f:
-        f.write(code)
+        f.write(new_code)
     print(f"  scanner.py updated with {len(changes)} changes:")
     for c in changes:
-        print(f"    • {c}")
+        print(f"    - {c}")
 else:
-    print("  No changes needed (already patched or no match)")
+    print("  No changes needed (already patched or reverted)")
 
-print("
-" + "=" * 55)
+print()
+print("=" * 55)
 print("v2.8.0 patcher complete.")
 print("Run: sudo systemctl restart trading-bot")
