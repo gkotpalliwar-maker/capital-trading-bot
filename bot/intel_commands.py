@@ -1,4 +1,4 @@
-# bot/intel_commands.py — v2.8.0
+# bot/intel_commands.py - v2.8.0
 # Telegram commands for market intelligence
 from __future__ import annotations
 
@@ -10,36 +10,45 @@ logger = logging.getLogger("intel_commands")
 
 
 async def intel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /intel command — show market intelligence for an instrument."""
+    """Handle /intel command - show market intelligence for an instrument."""
     try:
-        from bot.market_intelligence import MarketIntelligence
+        from market_intelligence import MarketIntelligence
 
         intel = MarketIntelligence()
         args = context.args if context.args else []
 
         if not args:
             # Show all instruments summary
-            lines = ["📊 <b>Market Intelligence Summary</b>
-"]
+            lines = ["<b>Market Intelligence Summary</b>", ""]
             instruments = ["gold", "crude", "eurusd", "gbpusd", "usdjpy"]
+            last_date = None
             for inst in instruments:
                 cot = intel.fetch_cot_data(inst)
                 if cot:
-                    emoji = "🟢" if "BULLISH" in cot["bias"] else "🔴" if "BEARISH" in cot["bias"] else "⚪"
+                    if "BULLISH" in cot["bias"]:
+                        emoji = "\U0001f7e2"
+                    elif "BEARISH" in cot["bias"]:
+                        emoji = "\U0001f534"
+                    else:
+                        emoji = "\u26aa"
+                    spec_net = cot["large_spec_net"]
+                    momentum = cot["spec_momentum"]
                     lines.append(f"{emoji} <b>{inst.upper()}</b>: {cot['bias']}")
-                    lines.append(f"   Specs {cot['spec_direction']} {cot['large_spec_net']:+,} ({cot['spec_momentum']})")
+                    lines.append(f"   Specs {cot['spec_direction']} {spec_net:+,} ({momentum})")
+                    last_date = cot.get("report_date", "")
                 else:
-                    lines.append(f"⚪ <b>{inst.upper()}</b>: COT unavailable")
+                    lines.append(f"\u26aa <b>{inst.upper()}</b>: COT unavailable")
 
             fg = intel.fetch_fear_greed()
             if fg:
-                lines.append(f"
-🎭 Fear & Greed: {fg['value']} ({fg['classification']})")
+                lines.append(f"")
+                lines.append(f"Fear & Greed: {fg['value']} ({fg['classification']})")
 
-            lines.append(f"
-📅 COT report: {cot['report_date'][:10] if cot else 'N/A'}")
-            await update.message.reply_text("
-".join(lines), parse_mode="HTML")
+            if last_date:
+                lines.append(f"")
+                lines.append(f"COT report: {str(last_date)[:10]}")
+
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         else:
             # Show full report for specific instrument
             inst = args[0].lower()
@@ -49,10 +58,10 @@ async def intel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode="HTML")
 
     except ImportError:
-        await update.message.reply_text("⚠️ Market intelligence not installed.")
+        await update.message.reply_text("Market intelligence not installed.")
     except Exception as e:
         logger.error(f"Intel command error: {e}")
-        await update.message.reply_text(f"❌ Error: {e}")
+        await update.message.reply_text(f"Error: {e}")
 
 
 def register_intel_commands(app):
