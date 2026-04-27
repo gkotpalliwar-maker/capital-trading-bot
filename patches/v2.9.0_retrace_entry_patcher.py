@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-"""v2.9.0 Patcher: Integrate retrace-entry strategy into scanner.py
-
-This patcher:
-1. Adds import for retrace_entry module
-2. Initializes retrace scanner after guardrails init
-3. Adds retrace signal generation into the scan loop
-
-Run from /opt/trading-bot:
-  venv/bin/python3 /tmp/v290/patches/v2.9.0_retrace_entry_patcher.py
-"""
-import os
-import sys
-import shutil
+"""v2.9.0 Patcher: Integrate retrace-entry into scanner.py"""
+import os, sys, shutil
 from datetime import datetime
 
 print("v2.9.0 Retrace-Entry Patcher")
@@ -24,155 +13,146 @@ if not os.path.exists(scanner_path):
 
 with open(scanner_path) as f:
     content = f.read()
+lines_list = content.split(chr(10))
 
-# Check if already patched
 if "retrace_entry" in content:
-    print("  Already patched (retrace_entry found). Skipping.")
+    print("  Already patched. Skipping.")
     sys.exit(0)
 
 # Backup
-backup_dir = os.path.join(os.getcwd(), "backups", datetime.now().strftime("%Y%m%d_%H%M%S"))
-os.makedirs(backup_dir, exist_ok=True)
-shutil.copy2(scanner_path, os.path.join(backup_dir, "scanner.py.bak"))
-print(f"  Backup: {backup_dir}/scanner.py.bak")
+bdir = os.path.join(os.getcwd(), "backups", datetime.now().strftime("%Y%m%d_%H%M%S"))
+os.makedirs(bdir, exist_ok=True)
+shutil.copy2(scanner_path, os.path.join(bdir, "scanner.py.bak"))
+print(f"  Backup: {bdir}/scanner.py.bak")
 
 changes = 0
+new_lines = []
 
-# ============================================================
-# PATCH 1: Add import
-# ============================================================
+# We process line-by-line and inject code at the right spots
+import_done = False
+init_done = False
+scan_done = False
 
-IMPORT_BLOCK = """
-try:
-    from retrace_entry import init_retrace_scanner, scan_retrace_entry
-    _retrace_available = True
-except ImportError:
-    _retrace_available = False
-"""
+for i, line in enumerate(lines_list):
+    new_lines.append(line)
 
-# Anchor: after guardrails import (v2.8.0)
-anchor1 = "_guardrails_available = False"
-anchor2 = "check_news_risk = None"
+    # PATCH 1: Add import after guardrails import
+    if not import_done and "_guardrails_available = False" in line:
+        new_lines.append("")
+        new_lines.append("try:")
+        new_lines.append("    from retrace_entry import init_retrace_scanner, scan_retrace_entry")
+        new_lines.append("    _retrace_available = True")
+        new_lines.append("except ImportError:")
+        new_lines.append("    _retrace_available = False")
+        import_done = True
+        changes += 1
+        print("  [1/3] Added retrace_entry import")
 
-if anchor1 in content:
-    idx = content.index(anchor1) + len(anchor1)
-    nl = content.index("
-", idx)
-    content = content[:nl + 1] + IMPORT_BLOCK + content[nl + 1:]
-    changes += 1
-    print("  [1/3] Added retrace_entry import (after guardrails)")
-elif anchor2 in content:
-    idx = content.index(anchor2) + len(anchor2)
-    nl = content.index("
-", idx)
-    content = content[:nl + 1] + IMPORT_BLOCK + content[nl + 1:]
-    changes += 1
-    print("  [1/3] Added retrace_entry import (after check_news_risk)")
-else:
-    print("  [1/3] FAILED: Could not find import anchor")
+    # Fallback: import after check_news_risk = None
+    if not import_done and "check_news_risk = None" in line:
+        new_lines.append("")
+        new_lines.append("try:")
+        new_lines.append("    from retrace_entry import init_retrace_scanner, scan_retrace_entry")
+        new_lines.append("    _retrace_available = True")
+        new_lines.append("except ImportError:")
+        new_lines.append("    _retrace_available = False")
+        import_done = True
+        changes += 1
+        print("  [1/3] Added retrace_entry import (fallback)")
 
-# ============================================================
-# PATCH 2: Init retrace scanner
-# ============================================================
+    # PATCH 2: Init retrace scanner after guardrails init
+    if not init_done and "Smart signal guardrails initialized" in line:
+        # Skip ahead 3 lines (except block), then inject
+        # We mark to inject after the except block ends
+        init_done = True  # mark, inject below
 
-INIT_BLOCK = """
-# v2.9.0: Initialize retrace-entry scanner
-_retrace_scanner = None
-if _retrace_available:
-    try:
-        _retrace_scanner = init_retrace_scanner()
-        logger.info("Retrace-entry scanner initialized")
-    except Exception as e:
-        logger.warning(f"Retrace scanner init failed: {e}")
-        _retrace_scanner = None
-"""
+    # Detect end of guardrails except block to inject init
+    if init_done and not scan_done and changes == 1:
+        # Look for the line that has _guardrails or _intel set to None (end of except)
+        stripped = line.strip()
+        if stripped.startswith("_guardrails") or stripped.startswith("_intel"):
+            if "= None" in stripped:
+                new_lines.append("")
+                new_lines.append("# v2.9.0: Initialize retrace-entry scanner")
+                new_lines.append("_retrace_scanner = None")
+                new_lines.append("if _retrace_available:")
+                new_lines.append("    try:")
+                new_lines.append("        _retrace_scanner = init_retrace_scanner()")
+                new_lines.append('        logger.info("Retrace-entry scanner initialized")')
+                new_lines.append("    except Exception as e:")
+                new_lines.append('        logger.warning(f"Retrace scanner init failed: {e}")')
+                new_lines.append("        _retrace_scanner = None")
+                changes += 1
+                print("  [2/3] Added retrace scanner init")
 
-# Anchor: after guardrails init log message
-init_anchor1 = "Smart signal guardrails initialized"
-init_anchor2 = "Database initialized"
+    # PATCH 3: Add retrace scan before "for sig in signals:"
+    if not scan_done and "for sig in signals:" in line:
+        # Get the indentation of this line
+        indent = line[:len(line) - len(line.lstrip())]
+        # Insert retrace scan BEFORE this line (replace last appended line)
+        new_lines.pop()  # remove the "for sig" line we just added
+        new_lines.append(indent + "# v2.9.0: Add retrace-entry signals")
+        new_lines.append(indent + "if _retrace_scanner is not None:")
+        new_lines.append(indent + "    try:")
+        new_lines.append(indent + "        retrace_sigs = scan_retrace_entry(df, inst, tf)")
+        new_lines.append(indent + "        for rs in retrace_sigs:")
+        new_lines.append(indent + "            sig_obj = type('Sig', (), {")
+        new_lines.append(indent + "                'direction': rs['direction'],")
+        new_lines.append(indent + "                'entry': rs['entry'],")
+        new_lines.append(indent + "                'sl': rs['sl'],")
+        new_lines.append(indent + "                'tp': rs['tp'],")
+        new_lines.append(indent + "                'rr_ratio': rs['rr_ratio'],")
+        new_lines.append(indent + "                'confluence': rs['confluence'],")
+        new_lines.append(indent + "                'metadata': rs,")
+        new_lines.append(indent + "            })()")
+        new_lines.append(indent + "            signals.append(sig_obj)")
+        new_lines.append(indent + "        if retrace_sigs:")
+        new_lines.append(indent + "            logger.info(f'Retrace: {len(retrace_sigs)} signals for {inst} {tf}')")
+        new_lines.append(indent + "    except Exception as e:")
+        new_lines.append(indent + "        logger.warning(f'Retrace scan error {inst} {tf}: {e}')")
+        new_lines.append("")
+        new_lines.append(line)  # re-add the "for sig in signals:" line
+        scan_done = True
+        changes += 1
+        print("  [3/3] Added retrace signal generation")
 
-if init_anchor1 in content:
-    # Find end of the guardrails init block (skip past except clause)
-    idx = content.index(init_anchor1)
-    # Move to end of this line
-    nl = content.index("
-", idx)
-    # Skip 3 more lines (except, _guardrails/intel, pass)
-    for _ in range(3):
-        next_nl = content.find("
-", nl + 1)
-        if next_nl == -1:
+# Fallback for init if we never found the guardrails except block
+if changes == 1 and init_done:
+    # Insert init after the first import block we added
+    for idx, ln in enumerate(new_lines):
+        if "_retrace_available = False" in ln:
+            insert_block = [
+                "",
+                "# v2.9.0: Initialize retrace-entry scanner",
+                "_retrace_scanner = None",
+                "if _retrace_available:",
+                "    try:",
+                "        _retrace_scanner = init_retrace_scanner()",
+                '        logger.info("Retrace-entry scanner initialized")',
+                "    except Exception as e:",
+                '        logger.warning(f"Retrace scanner init failed: {e}")',
+                "        _retrace_scanner = None",
+            ]
+            for j, block_line in enumerate(insert_block):
+                new_lines.insert(idx + 1 + j, block_line)
+            changes += 1
+            print("  [2/3] Added retrace scanner init (fallback)")
             break
-        nl = next_nl
-    content = content[:nl + 1] + INIT_BLOCK + content[nl + 1:]
-    changes += 1
-    print("  [2/3] Added retrace scanner init (after guardrails init)")
-elif init_anchor2 in content:
-    idx = content.index(init_anchor2)
-    nl = content.index("
-", idx)
-    content = content[:nl + 1] + INIT_BLOCK + content[nl + 1:]
-    changes += 1
-    print("  [2/3] Added retrace scanner init (after DB init)")
-else:
-    print("  [2/3] FAILED: Could not find init anchor")
 
-# ============================================================
-# PATCH 3: Add retrace signal generation before signal loop
-# ============================================================
-
-RETRACE_SCAN = """
-            # v2.9.0: Add retrace-entry signals
-            if _retrace_scanner is not None:
-                try:
-                    retrace_sigs = scan_retrace_entry(df, inst, tf)
-                    for rs in retrace_sigs:
-                        sig_obj = type("Sig", (), {
-                            "direction": rs["direction"],
-                            "entry": rs["entry"],
-                            "sl": rs["sl"],
-                            "tp": rs["tp"],
-                            "rr_ratio": rs["rr_ratio"],
-                            "confluence": rs["confluence"],
-                            "metadata": rs,
-                        })()
-                        signals.append(sig_obj)
-                    if retrace_sigs:
-                        logger.info(f"Retrace: {len(retrace_sigs)} signals for {inst} {tf}")
-                except Exception as e:
-                    logger.warning(f"Retrace scan error {inst} {tf}: {e}")
-"""
-
-loop_anchor = "for sig in signals:"
-if loop_anchor in content:
-    idx = content.index(loop_anchor)
-    # Find start of the line containing the for loop
-    line_start = content.rfind("
-", 0, idx) + 1
-    content = content[:line_start] + RETRACE_SCAN + content[line_start:]
-    changes += 1
-    print("  [3/3] Added retrace signal generation before signal loop")
-else:
-    print("  [3/3] FAILED: Could not find signal loop anchor")
-
-# ============================================================
-# WRITE AND VERIFY
-# ============================================================
 if changes >= 2:
+    final = chr(10).join(new_lines)
     with open(scanner_path, "w") as f:
-        f.write(content)
-    print(f"
-  scanner.py patched ({changes}/3 changes)")
+        f.write(final)
+    print(f"  scanner.py patched ({changes}/3 changes)")
     try:
-        compile(content, scanner_path, "exec")
+        compile(final, scanner_path, "exec")
         print("  Syntax check passed")
     except SyntaxError as e:
         print(f"  SYNTAX ERROR: {e}")
         print("  Restoring backup...")
-        shutil.copy2(os.path.join(backup_dir, "scanner.py.bak"), scanner_path)
+        shutil.copy2(os.path.join(bdir, "scanner.py.bak"), scanner_path)
         print("  Backup restored")
         sys.exit(1)
 else:
-    print(f"
-  Only {changes}/3 patches applied. Not writing.")
+    print(f"  Only {changes}/3 patches. Not writing.")
     sys.exit(1)
