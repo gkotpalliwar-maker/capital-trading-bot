@@ -24,6 +24,8 @@ DEFAULT_CONFIG = {
     "min_rr": 1.0,              # Minimum risk:reward ratio
     "max_impulse_age": 20,      # Max candles to look back for origin
     "base_confluence": 8,       # Base confluence for retrace signals
+    "max_signal_age": 5,        # Only return signals from last N candles
+    "min_risk_atr": 0.3,        # Min risk as fraction of ATR (filters tiny SL)
 }
 
 
@@ -69,6 +71,8 @@ class RetraceEntryScanner:
         min_rr = cfg["min_rr"]
         max_age = cfg["max_impulse_age"]
         base_conf = cfg["base_confluence"]
+        max_signal_age = cfg.get("max_signal_age", 5)
+        min_risk_atr = cfg.get("min_risk_atr", 0.3)
 
         if n < impulse_len + max_wait + 5:
             return []
@@ -134,6 +138,13 @@ class RetraceEntryScanner:
                 i += 1
                 continue
 
+            # Filter: minimum risk must be meaningful (avoid 0.66 pt SL)
+            if has_atr and not pd.isna(df["atr"].iloc[entry_idx]):
+                atr_at_entry = float(df["atr"].iloc[entry_idx])
+                if atr_at_entry > 0 and risk < atr_at_entry * min_risk_atr:
+                    i += 1
+                    continue
+
             # ── STEP 5: Build signal ──
             # ATR-based position sizing hint
             atr_val = None
@@ -195,6 +206,9 @@ class RetraceEntryScanner:
             i = entry_idx + 2
             continue
 
+        # Only return signals from the last max_signal_age candles
+        if max_signal_age > 0:
+            signals = [s for s in signals if s["candle_index"] >= n - max_signal_age]
         return signals
 
     # ================================================================
