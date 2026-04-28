@@ -570,6 +570,75 @@ class SignalGuardrails:
     # ============================================================
     # MASTER: APPLY ALL GUARDRAILS
     # ============================================================
+
+    def check_sl_tp_direction(self, direction: str,
+                               signal_metadata: Dict = None) -> 'GuardrailResult':
+        """Hard-block signals where SL/TP are on the wrong side of entry.
+
+        BUY: SL must be below entry, TP must be above entry.
+        SELL: SL must be above entry, TP must be below entry.
+
+        This catches the zone-on-wrong-side edge case from smc_ict.py
+        where the zone boundary produces an inverted SL/TP.
+        """
+        name = "SL/TP Direction"
+
+        if signal_metadata is None:
+            return GuardrailResult(name, True, 0, "No metadata", False)
+
+        entry = signal_metadata.get("entry") or signal_metadata.get("entry_price")
+        sl = signal_metadata.get("sl") or signal_metadata.get("stopLevel")
+        tp = signal_metadata.get("tp") or signal_metadata.get("profitLevel")
+
+        if entry is None or sl is None:
+            return GuardrailResult(name, True, 0, "No entry/SL data", False)
+
+        try:
+            entry = float(entry)
+            sl = float(sl)
+        except (ValueError, TypeError):
+            return GuardrailResult(name, True, 0, "Non-numeric entry/SL", False)
+
+        if direction == "BUY":
+            if sl > entry:
+                return GuardrailResult(
+                    name, False, 0,
+                    f"BUY but SL ({sl:.5f}) > entry ({entry:.5f}) = INVERTED",
+                    is_hard_block=True
+                )
+            if tp is not None:
+                try:
+                    tp = float(tp)
+                    if tp < entry:
+                        return GuardrailResult(
+                            name, False, 0,
+                            f"BUY but TP ({tp:.5f}) < entry ({entry:.5f}) = INVERTED",
+                            is_hard_block=True
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        elif direction == "SELL":
+            if sl < entry:
+                return GuardrailResult(
+                    name, False, 0,
+                    f"SELL but SL ({sl:.5f}) < entry ({entry:.5f}) = INVERTED",
+                    is_hard_block=True
+                )
+            if tp is not None:
+                try:
+                    tp = float(tp)
+                    if tp > entry:
+                        return GuardrailResult(
+                            name, False, 0,
+                            f"SELL but TP ({tp:.5f}) > entry ({entry:.5f}) = INVERTED",
+                            is_hard_block=True
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        return GuardrailResult(name, True, 0, "SL/TP direction OK", False)
+
     def evaluate_signal(self, df, instrument: str, direction: str,
                          timeframe: str, signal_metadata: Dict = None) -> Dict:
         """
@@ -587,6 +656,9 @@ class SignalGuardrails:
             }
         """
         results = []
+
+        # === SL/TP Direction Validation (hard block) ===
+        results.append(self.check_sl_tp_direction(direction, signal_metadata))
 
         # === Pure Price Action Guardrails (always available) ===
         results.append(self.check_premium_discount(df, direction))
