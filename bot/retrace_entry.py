@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     "min_rr": 1.0,              # Minimum risk:reward ratio
     "max_impulse_age": 20,      # Max candles to look back for origin
     "base_confluence": 8,       # Base confluence for retrace signals
-    "max_signal_age": 5,        # Only return signals from last N candles
+    "max_signal_age": 20,       # Only return signals from last N candles (retrace needs ~15)
     "min_risk_atr": 0.3,        # Min risk as fraction of ATR (filters tiny SL)
 }
 
