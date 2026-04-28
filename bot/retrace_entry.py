@@ -178,6 +178,7 @@ class RetraceEntryScanner:
                 "direction": direction,
                 "entry": round(float(entry_price), 5),
                 "entry_price": round(float(entry_price), 5),
+                "entry_price": round(float(entry_price), 5),
                 "sl": round(float(sl), 5),
                 "tp": round(float(tp), 5),
                 "rr_ratio": round(rr_ratio, 2),
