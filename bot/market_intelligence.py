@@ -25,6 +25,7 @@ COT_INSTRUMENT_MAP = {
     "gbpusd":  {"cftc_code": "096742", "name": "BRITISH POUND"},
     "usdjpy":  {"cftc_code": "097741", "name": "JAPANESE YEN"},
     "us500":   {"cftc_code": "13874A", "name": "E-MINI S&P 500"},
+    "spx500":  {"cftc_code": "13874A", "name": "E-MINI S&P 500"},  # alias for us500
     "nas100":  {"cftc_code": "209742", "name": "E-MINI NASDAQ-100"},
     "btcusd":  {"cftc_code": "133741", "name": "BITCOIN"},
     "ethusd":  {"cftc_code": "244601", "name": "ETHER"},
@@ -38,6 +39,7 @@ TV_INSTRUMENT_MAP = {
     "gbpusd":  {"exchange": "OANDA",  "symbol": "GBPUSD"},
     "usdjpy":  {"exchange": "OANDA",  "symbol": "USDJPY"},
     "us500":   {"exchange": "OANDA",  "symbol": "SPX500USD"},
+    "spx500":  {"exchange": "OANDA",  "symbol": "SPX500USD"},  # alias for us500
     "nas100":  {"exchange": "OANDA",  "symbol": "NAS100USD"},
     "btcusd":  {"exchange": "BITSTAMP", "symbol": "BTCUSD"},
     "ethusd":  {"exchange": "BITSTAMP", "symbol": "ETHUSD"},
