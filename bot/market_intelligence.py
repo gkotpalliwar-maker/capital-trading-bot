@@ -31,18 +31,18 @@ COT_INSTRUMENT_MAP = {
     "ethusd":  {"cftc_code": "244601", "name": "ETHER"},
 }
 
-# TradingView: exchange + symbol per instrument
+# TradingView: exchange + symbol + screener per instrument
 TV_INSTRUMENT_MAP = {
-    "gold":    {"exchange": "OANDA",  "symbol": "XAUUSD"},
-    "crude":   {"exchange": "TVC",    "symbol": "USOIL"},
-    "eurusd":  {"exchange": "OANDA",  "symbol": "EURUSD"},
-    "gbpusd":  {"exchange": "OANDA",  "symbol": "GBPUSD"},
-    "usdjpy":  {"exchange": "OANDA",  "symbol": "USDJPY"},
-    "us500":   {"exchange": "OANDA",  "symbol": "SPX500USD"},
-    "spx500":  {"exchange": "OANDA",  "symbol": "SPX500USD"},  # alias for us500
-    "nas100":  {"exchange": "OANDA",  "symbol": "NAS100USD"},
-    "btcusd":  {"exchange": "BITSTAMP", "symbol": "BTCUSD"},
-    "ethusd":  {"exchange": "BITSTAMP", "symbol": "ETHUSD"},
+    "gold":    {"exchange": "OANDA",      "symbol": "XAUUSD",  "screener": "cfd"},
+    "crude":   {"exchange": "FX",         "symbol": "USOIL",   "screener": "cfd"},
+    "eurusd":  {"exchange": "CAPITALCOM", "symbol": "EURUSD",  "screener": "forex"},
+    "gbpusd":  {"exchange": "CAPITALCOM", "symbol": "GBPUSD",  "screener": "forex"},
+    "usdjpy":  {"exchange": "CAPITALCOM", "symbol": "USDJPY",  "screener": "forex"},
+    "us500":   {"exchange": "SP",         "symbol": "SPX",     "screener": "america"},
+    "spx500":  {"exchange": "SP",         "symbol": "SPX",     "screener": "america"},
+    "nas100":  {"exchange": "NASDAQ",     "symbol": "NDX",     "screener": "america"},
+    "btcusd":  {"exchange": "BITSTAMP",   "symbol": "BTCUSD",  "screener": "crypto"},
+    "ethusd":  {"exchange": "BITSTAMP",   "symbol": "ETHUSD",  "screener": "crypto"},
 }
 
 # TradingView intervals mapped to our timeframes
@@ -333,7 +333,7 @@ class MarketIntelligence:
             handler = TA_Handler(
                 symbol=mapping["symbol"],
                 exchange=mapping["exchange"],
-                screener="forex" if instrument not in ("btcusd", "ethusd", "us500", "nas100") else "crypto" if instrument in ("btcusd", "ethusd") else "america",
+                screener=mapping.get("screener", "forex"),
                 interval=tv_interval,
             )
             analysis = handler.get_analysis()
