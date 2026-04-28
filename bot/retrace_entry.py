@@ -177,6 +177,7 @@ class RetraceEntryScanner:
                 "strategy": "retrace_entry",
                 "direction": direction,
                 "entry": round(float(entry_price), 5),
+                "entry_price": round(float(entry_price), 5),
                 "sl": round(float(sl), 5),
                 "tp": round(float(tp), 5),
                 "rr_ratio": round(rr_ratio, 2),
@@ -195,20 +196,23 @@ class RetraceEntryScanner:
             }
 
             signals.append(signal)
-            logger.info(
-                f"Retrace {direction} signal: {instrument} {timeframe} "
-                f"entry={entry_price:.5f} sl={sl:.5f} tp={tp:.5f} "
-                f"R:R={rr_ratio:.1f} retrace={retrace_pct:.0f}% "
-                f"confluence={confluence}"
-            )
 
             # Skip past entry to avoid overlapping signals
             i = entry_idx + 2
             continue
 
         # Only return signals from the last max_signal_age candles
+        pre_filter = len(signals)
         if max_signal_age > 0:
             signals = [s for s in signals if s["candle_index"] >= n - max_signal_age]
+        if signals:
+            for s in signals:
+                logger.info(
+                    f"Retrace {s['direction']}: {instrument} {timeframe} "
+                    f"entry={s['entry']:.5f} R:R={s['rr_ratio']:.1f} "
+                    f"retrace={s['retrace_pct']:.0f}% conf={s['confluence']} "
+                    f"(filtered {pre_filter}->{len(signals)})"
+                )
         return signals
 
     # ================================================================
