@@ -9,7 +9,6 @@ path = os.path.join(os.getcwd(), "bot", "scanner.py")
 with open(path) as f:
     content = f.read()
 
-# Fix: entry -> entry_price in Sig object
 old = "'entry': rs['entry'],"
 new = "'entry_price': rs['entry'],"
 
@@ -21,4 +20,4 @@ if old in content:
 elif new in content:
     print("  Already fixed")
 else:
-    print("  WARNING: Could not find anchor string")
+    print("  WARNING: anchor not found")
