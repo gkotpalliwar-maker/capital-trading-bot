@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """
 Diagnostic: Show full guardrail evaluation for Gold and Crude.
-Usage: cd /opt/trading-bot && venv/bin/python3 diag/guardrail_check.py
+Usage: cd /opt/trading-bot && venv/bin/python3 /tmp/diag_guardrails.py
 """
 import sys, os
 sys.path.insert(0, "/opt/trading-bot")
 os.chdir("/opt/trading-bot")
 
-import json
-from pathlib import Path
-
-# Load bot config
-config = json.loads(Path("config.json").read_text())
+# Import bot's config (Python module)
+from config import CAPITAL_API_URL, CAPITAL_API_KEY, CAPITAL_EMAIL, CAPITAL_PASSWORD
 
 # Initialize Capital.com client
 from bot.capital_client import CapitalClient
-client = CapitalClient(config["api_key"], config["identifier"], config["password"],
-                      demo=config.get("demo", True))
+client = CapitalClient(CAPITAL_API_URL, CAPITAL_API_KEY, CAPITAL_EMAIL, CAPITAL_PASSWORD)
 client.create_session()
 
-# Import scanner's candle fetcher
-from bot.candle_fetcher import fetch_candles_for_scanner
+# Import guardrails
 from bot.signal_guardrails import SignalGuardrails
+from bot.candle_fetcher import fetch_candles_for_scanner
 import pandas as pd
 
 guardrails = SignalGuardrails()
@@ -72,18 +68,26 @@ for instrument, direction in instruments:
             print(f"  Entry: {close:.5f} | SL: {sl:.5f} | TP: {tp:.5f}")
             print(f"  Score: {result['final_score']}/20 (min: 3) | Passed: {result['passed']}")
             if result['hard_blocks']:
-                print(f"  🚫 HARD BLOCKS: {result['hard_blocks']}")
+                print(f"  \U0001f6ab HARD BLOCKS:")
+                for hb in result['hard_blocks']:
+                    print(f"       {hb}")
             print(f"  Checks:")
             for r in result['results']:
-                icon = "✅" if r.passed and r.score_adj > 0 else "⚠️" if r.score_adj < 0 else "➖"
+                icon = "+" if r.passed and r.score_adj > 0 else "-" if r.score_adj < 0 else "="
                 if r.is_hard_block:
-                    icon = "🚫"
-                print(f"    {icon} {r.name:20s} {r.score_adj:+d}  {r.reason}")
+                    icon = "X"
+                print(f"    [{icon}] {r.name:20s} {r.score_adj:+d}  {r.reason}")
 
         except Exception as e:
-            print(f"  ❌ Error: {e}")
+            print(f"  Error: {e}")
+            import traceback
+            traceback.print_exc()
 
-client.close_session()
+try:
+    client.close_session()
+except:
+    pass
+
 print(f"\n{'='*70}")
 print("  DONE")
 print(f"{'='*70}")
