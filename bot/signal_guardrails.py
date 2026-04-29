@@ -96,7 +96,7 @@ class SignalGuardrails:
                 return GuardrailResult(
                     "Premium/Discount", False, -3,
                     f"BUY in premium zone ({position_in_range:.0%} of range) — buying expensive",
-                    is_hard_block=(position_in_range >= 0.90)  # Block if top 10%
+                    is_hard_block=(position_in_range >= 0.98)  # Block if top 2% only (trending markets stay premium)
                 )
 
         elif direction == "SELL":
@@ -114,7 +114,7 @@ class SignalGuardrails:
                 return GuardrailResult(
                     "Premium/Discount", False, -3,
                     f"SELL in discount zone ({position_in_range:.0%} of range) — selling cheap",
-                    is_hard_block=(position_in_range <= 0.10)
+                    is_hard_block=(position_in_range <= 0.02)  # Block if bottom 2% only
                 )
 
         return GuardrailResult("Premium/Discount", True, 0, "Unknown direction")
