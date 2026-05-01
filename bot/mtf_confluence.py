@@ -15,6 +15,10 @@ def get_htf_bias(epic: str, client, timeframe: str = "HOUR_4", lookback: int = 2
     Returns: {"bias": "bullish"|"bearish"|"neutral", "confidence": float 0-1,
               "structure": "HH/HL"|"LH/LL"|"mixed", "last_mss": "bullish"|"bearish"|"none"}
     """
+    # v2.10.0: Resolve lowercase instrument keys to uppercase API epics
+    from config import resolve_instrument
+    epic = resolve_instrument(epic)
+
     now = datetime.now(timezone.utc)
     
     # Check cache
