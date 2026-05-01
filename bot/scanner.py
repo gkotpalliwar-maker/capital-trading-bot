@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("bot.log")])
+    handlers=[logging.FileHandler("bot.log")])
 logger = logging.getLogger("scanner")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
