@@ -148,7 +148,7 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         "rsi": float(rsi) if not pd.isna(rsi) else 0,
                         "top5": is_top5, "risk_pct": risk_pct,
                         "session": session_str,
-                        "metadata": sig.metadata,
+
                     }
                     sig_data["regime"] = regime.get("label", "")
 
@@ -167,7 +167,7 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             ml_scorer_mod=_ml_scorer_mod,
                             mtf_func=check_mtf_alignment,
                         )
-                        sig_data["decision"] = decision
+                        sig_data["decision"] = signal_decision.sanitize_for_storage(decision)
                         sig_data["guardrail_text"] = decision.get("telegram_text", "")
                         sig_data["guardrail_score"] = decision["modifiers"].get("guardrail_raw", 0)
 
