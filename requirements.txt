@@ -1,0 +1,20 @@
+# Capital.com Trading Bot — Python dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+requests>=2.31.0
+numpy>=1.24.0
+pandas>=1.5.0
+python-dotenv>=1.0.0
+
+# Telegram
+python-telegram-bot>=20.0
+
+# ML
+scikit-learn>=1.2.0
+
+# Web dashboard
+flask>=2.3.0
+
+# Market intelligence (optional — degrades gracefully if unavailable)
+tradingview-ta>=3.3.0
