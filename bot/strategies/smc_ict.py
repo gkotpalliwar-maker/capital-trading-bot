@@ -13,10 +13,6 @@ def _safe_bool(series):
     return series.fillna(False).astype(bool)
 
 
-def _safe_bool(series):
-    return series.fillna(False).astype(bool)
-
-
 def detect_order_blocks(df: pd.DataFrame, atr_multiplier: float = 2.0,
                         max_age: int = 50) -> List[Dict]:
     """
