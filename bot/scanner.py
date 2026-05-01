@@ -105,9 +105,9 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             sig_obj = type('Sig', (), {
                                 'direction': rs['direction'],
                                 'entry_price': rs['entry'],
-                                'sl': rs['sl'],
-                                'tp': rs['tp'],
-                                'rr_ratio': rs['rr_ratio'],
+                                'stop_loss': rs['sl'],
+                                'take_profit': rs['tp'],
+                                'risk_reward_ratio': lambda self: rs['rr_ratio'],
                                 'confluence': rs['confluence'],
                                 'metadata': rs,
                             })()
