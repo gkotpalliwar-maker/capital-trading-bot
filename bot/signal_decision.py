@@ -235,9 +235,23 @@ def evaluate_signal_candidate(
             logger.warning("News filter error: %s", e)
             modifiers["news_status"] = "error"
             warnings.append(f"News error: {e}")
+            try:
+                from news_filter import NEWS_REQUIRED as _news_req2
+                if _news_req2:
+                    score += P_NEWS_UNAVAIL
+                    warnings.append(f"News REQUIRED but errored ({P_NEWS_UNAVAIL:+d})")
+            except ImportError:
+                pass
     else:
-        # News module not loaded — small penalty if required
+        # News module not loaded
         modifiers["news_status"] = "unavailable"
+        try:
+            from news_filter import NEWS_REQUIRED as _news_req
+            if _news_req:
+                score += P_NEWS_UNAVAIL
+                warnings.append(f"News REQUIRED but unavailable ({P_NEWS_UNAVAIL:+d})")
+        except ImportError:
+            pass  # news_filter not installed at all — no penalty
 
     # ================================================================
     # 4. ML SCORING (+0-20 or penalty)
