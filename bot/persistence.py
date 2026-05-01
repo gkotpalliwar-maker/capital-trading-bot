@@ -145,11 +145,15 @@ def save_signal(sig_data: Dict) -> int:
 
 
 def mark_signal(signal_id: int, status: str):
-    """Mark a signal as executed, skipped, or expired."""
+    """Mark a signal with a status (executed, skipped, expired, blocked, watch, mtf_blocked)."""
     conn = _get_conn()
     field = {"executed": "executed_at", "skipped": "skipped_at", "expired": "expired_at"}.get(status)
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute(f"UPDATE signals SET status=?, {field}=? WHERE id=?", (status, now, signal_id))
+    if field:
+        conn.execute(f"UPDATE signals SET status=?, {field}=? WHERE id=?", (status, now, signal_id))
+    else:
+        # v2.10.0: blocked/watch/mtf_blocked — just update status column
+        conn.execute("UPDATE signals SET status=? WHERE id=?", (status, signal_id))
     conn.commit()
 
 
