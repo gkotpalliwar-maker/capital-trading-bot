@@ -14,15 +14,6 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("mss_bos")
 
-"""MSS/BOS Detection + Enhanced SMC/ICT Signal Filter.
-
-v2.7.1: Fixed SL/TP swap + stronger MSS confirmation + swing_lookback=3.
-"""
-import types as _types
-import logging
-
-logger = logging.getLogger("mss_bos")
-
 
 def detect_market_structure_shift(df, swing_lookback=3, max_age=30):
     """
