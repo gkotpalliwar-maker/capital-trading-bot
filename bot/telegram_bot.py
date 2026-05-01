@@ -95,7 +95,7 @@ def _tg_edit_message(chat_id, message_id, text, parse_mode="HTML"):
 # SIGNAL NOTIFICATIONS (with Execute button)
 # ================================================================
 
-def notify_signal(signal_data):
+def notify_signal(signal_data, executable=True):
     direction = signal_data.get("direction", "")
     instrument = signal_data.get("inst_name", signal_data.get("instrument", "?"))
     epic = resolve_instrument(signal_data.get("instrument", ""))
@@ -134,13 +134,22 @@ def notify_signal(signal_data):
         f"\u23f3 Expires in {expiry_min}m"
         + (f"\n\u26a0\ufe0f Regime: {signal_data.get('regime_warning', '')}" if signal_data.get("regime_warning") else ""))
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"\U0001f680 Execute {direction} x{size}", callback_data=f"exec:{sig_id}"),
-         InlineKeyboardButton("\u274c Skip", callback_data=f"skip:{sig_id}")],
-        [InlineKeyboardButton("\U0001f680 Half Size", callback_data=f"half:{sig_id}"),
-         InlineKeyboardButton("\U0001f680 Double Size", callback_data=f"dbl:{sig_id}")]
-    ])
-    return send_message_sync(text, reply_markup=keyboard)
+    # v2.10.0: Append decision/guardrail text if available
+    guardrail_text = signal_data.get("guardrail_text", "")
+    if guardrail_text:
+        text += "\n" + guardrail_text
+
+    if executable:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"\U0001f680 Execute {direction} x{size}", callback_data=f"exec:{sig_id}"),
+             InlineKeyboardButton("\u274c Skip", callback_data=f"skip:{sig_id}")],
+            [InlineKeyboardButton("\U0001f680 Half Size", callback_data=f"half:{sig_id}"),
+             InlineKeyboardButton("\U0001f680 Double Size", callback_data=f"dbl:{sig_id}")]
+        ])
+        return send_message_sync(text, reply_markup=keyboard)
+    else:
+        # ALERT mode: show signal info but no Execute buttons
+        return send_message_sync(text)
 
 
 # ================================================================
