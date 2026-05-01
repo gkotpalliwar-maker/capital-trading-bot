@@ -413,3 +413,31 @@ def format_decision_log(decision: Dict, sig_data: Dict) -> str:
         f"regime={decision['modifiers'].get('regime_ok','?')}|"
         f"rr={decision['modifiers'].get('rr_ratio',0):.1f}"
     )
+
+def sanitize_for_storage(decision: Dict) -> Dict:
+    """Return a JSON-serializable copy of the decision dict.
+    
+    Strips GuardrailResult objects and any other non-serializable types
+    so the decision can be safely passed to json.dumps() in persistence.
+    """
+    import copy
+    clean = copy.deepcopy(decision)
+    
+    # Remove the raw guardrail_result (contains GuardrailResult objects)
+    if "guardrail_result" in clean:
+        gr = clean["guardrail_result"]
+        if gr is not None:
+            # Keep only the serializable parts
+            clean["guardrail_result"] = {
+                "passed": gr.get("passed"),
+                "final_score": gr.get("final_score"),
+                "base_score": gr.get("base_score"),
+                "max_possible_score": gr.get("max_possible_score"),
+                "hard_blocks": gr.get("hard_blocks", []),
+                "quality": gr.get("quality", ""),
+                "summary": gr.get("summary", ""),
+                # Convert GuardrailResult objects to strings
+                "results": [str(r) for r in gr.get("results", [])],
+            }
+    
+    return clean
