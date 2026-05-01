@@ -147,7 +147,7 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         "direction": sig.direction, "entry": sig.entry_price,
                         "sl": sig.stop_loss, "tp": sig.take_profit,
                         "rr": sig.risk_reward_ratio(),
-                        "confluence": sig.metadata.get("smc_confluence", 0),
+                        "confluence": sig.metadata.get("smc_confluence", sig.metadata.get("confluence", 0)),
                         "zone_types": zt, "mss_type": sig.metadata.get("mss_type", "none"),
                         "rsi": float(rsi) if not pd.isna(rsi) else 0,
                         "top5": is_top5, "risk_pct": risk_pct,
