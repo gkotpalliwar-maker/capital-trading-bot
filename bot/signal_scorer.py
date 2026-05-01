@@ -125,17 +125,17 @@ def _should_retrain():
 def score_signal(data: dict) -> float:
     global _model, _encoders
     if _model is None and not _load_model():
-        if not train_model()[0]: return 1.0
+        if not train_model()[0]: return 0.5  # v2.10.0: neutral when unavailable (was 1.0)
     if _should_retrain(): train_model()
     with _model_lock:
-        if _model is None: return 1.0
+        if _model is None: return 0.5  # v2.10.0: neutral when unavailable (was 1.0)
         try:
             X = _encode_features([_extract_features(data)], fit=False)
             p = _model.predict_proba(X)[0]
             return float(p[1] if len(p) > 1 else p[0])
         except Exception as e:
             logger.error(f"Score error: {e}")
-            return 1.0
+            return 0.5  # v2.10.0: neutral on error (was 1.0)
 
 def should_take_signal(data: dict, threshold: float = None) -> tuple:
     th = threshold or ML_CONFIDENCE_THRESHOLD
