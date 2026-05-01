@@ -346,6 +346,20 @@ def main():
             "\U0001f4be SQLite persistence enabled\n"
             "\U0001f4f1 /help for commands | /about for info")
 
+
+    # v2.10.0 Phase 3: Activate news filter guard
+    try:
+        from news_filter import activate_guard, get_events, get_guard_status
+        activate_guard()
+        events = get_events(refresh=True)
+        status = get_guard_status()
+        logger.info("  News guard: ACTIVE | %d events cached | block=%dmin before, %dmin after",
+                     len(events), status["block_before"], status["block_after"])
+    except ImportError:
+        logger.warning("  News guard: NOT AVAILABLE (news_filter import failed)")
+    except Exception as e:
+        logger.warning("  News guard: ACTIVATION FAILED: %s", e)
+
     instruments = DEFAULT_INSTRUMENTS
     scan_count = 0
     round_num = 0
@@ -406,6 +420,13 @@ def main():
         logger.info("=" * 60)
         logger.info("  SCAN #%d (round %d) -- %s", scan_count, round_num, now_utc.strftime("%H:%M:%S UTC"))
         logger.info("  Sessions: %s", session_str)
+
+        # v2.10.0 Phase 3: Refresh news events each scan cycle
+        try:
+            get_events(refresh=False)  # Uses cache TTL (6h), fetches if stale
+        except Exception:
+            pass
+
 
         try:
             all_signals, top5_count = scan_and_notify(client, smc, instruments, DEFAULT_TIMEFRAMES)
