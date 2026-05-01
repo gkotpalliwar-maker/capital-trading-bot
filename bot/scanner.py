@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capital.com Trading Bot v2.1 - Scanner with persistence, risk controls, and restart recovery"""
+"""Capital.com Trading Bot - Scanner with persistence, risk controls, and restart recovery."""
 import sys, os, time, asyncio, logging, traceback
 import signal as _signal
 from datetime import datetime, timezone, timedelta
@@ -67,7 +67,7 @@ if _retrace_available:
         logger.warning(f"Retrace scanner init failed: {e}")
         _retrace_scanner = None
 
-BOT_VERSION = "2.2.9"
+from version import BOT_VERSION
 _running = True
 
 def _signal_handler(sig, frame):
