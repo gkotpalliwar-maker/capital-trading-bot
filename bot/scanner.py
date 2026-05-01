@@ -68,6 +68,21 @@ if _retrace_available:
         _retrace_scanner = None
 
 from version import BOT_VERSION
+
+# v2.10.0: Signal Decision Engine
+try:
+    import signal_decision
+    import news_filter as _news_filter_mod
+    import signal_scorer as _ml_scorer_mod
+    HAS_DECISION_ENGINE = True
+    logger.info("Signal decision engine v2.10.0 loaded")
+except ImportError as e:
+    logger.warning(f"Decision engine not available, using legacy flow: {e}")
+    HAS_DECISION_ENGINE = False
+    signal_decision = None
+    _news_filter_mod = None
+    _ml_scorer_mod = None
+
 _running = True
 
 def _signal_handler(sig, frame):
@@ -118,7 +133,83 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         logger.warning(f'Retrace scan error {inst} {tf}: {e}')
 
                 for sig in signals:
-                    # v2.8.0: Guardrail evaluation
+                    # ── Build sig_data (same structure for DB/Telegram compat) ──
+                    zt = sig.metadata.get("zone_types", "")
+                    is_top5 = zt in WINNING_ZONE_COMBOS
+                    rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else 0
+                    risk_pct = abs(sig.entry_price - sig.stop_loss) / sig.entry_price * 100 if sig.entry_price else 0
+                    sig_data = {
+                        "instrument": inst, "inst_name": inst_name, "tf": tf,
+                        "direction": sig.direction, "entry": sig.entry_price,
+                        "sl": sig.stop_loss, "tp": sig.take_profit,
+                        "rr": sig.risk_reward_ratio(),
+                        "confluence": sig.metadata.get("smc_confluence", sig.metadata.get("confluence", 0)),
+                        "zone_types": zt, "mss_type": sig.metadata.get("mss_type", "none"),
+                        "rsi": float(rsi) if not pd.isna(rsi) else 0,
+                        "top5": is_top5, "risk_pct": risk_pct,
+                        "session": session_str,
+                        "metadata": sig.metadata,
+                    }
+                    sig_data["regime"] = regime.get("label", "")
+
+                    # ── v2.10.0: Signal Decision Engine ──
+                    if HAS_DECISION_ENGINE and signal_decision is not None:
+                        decision = signal_decision.evaluate_signal_candidate(
+                            signal=sig_data,
+                            df=df,
+                            client=client,
+                            instrument=inst,
+                            timeframe=tf,
+                            regime=regime,
+                            guardrails=_guardrails,
+                            risk_manager=risk_manager,
+                            news_filter_mod=_news_filter_mod,
+                            ml_scorer_mod=_ml_scorer_mod,
+                            mtf_func=check_mtf_alignment,
+                        )
+                        sig_data["decision"] = decision
+                        sig_data["guardrail_text"] = decision.get("telegram_text", "")
+                        sig_data["guardrail_score"] = decision["modifiers"].get("guardrail_raw", 0)
+
+                        status = decision["status"]
+                        if status == signal_decision.BLOCK:
+                            logger.info("  BLOCKED: %s %s [%s] score=%d blocks=%s",
+                                inst_name, sig.direction, tf, decision["score"],
+                                decision["blocks"][:2])
+                            sig_row_id = db.save_signal(sig_data)
+                            db.mark_signal(sig_row_id, "blocked")
+                            all_signals.append(sig_data)
+                            continue
+                        elif status == signal_decision.WATCH:
+                            logger.info("  WATCH: %s %s [%s] score=%d quality=%s",
+                                inst_name, sig.direction, tf, decision["score"],
+                                decision["quality"])
+                            sig_row_id = db.save_signal(sig_data)
+                            db.mark_signal(sig_row_id, "watch")
+                            all_signals.append(sig_data)
+                            continue
+                        elif status == signal_decision.ALERT:
+                            logger.info("  ALERT: %s %s [%s] score=%d quality=%s",
+                                inst_name, sig.direction, tf, decision["score"],
+                                decision["quality"])
+                            sig_row_id = db.save_signal(sig_data)
+                            sig_data["_db_id"] = sig_row_id
+                            sig_data["_created_at"] = time.time()
+                            telegram_bot.notify_signal(sig_data, executable=False)
+                            all_signals.append(sig_data)
+                            continue
+                        else:  # EXECUTABLE
+                            logger.info("  EXECUTABLE: %s %s [%s] score=%d quality=%s",
+                                inst_name, sig.direction, tf, decision["score"],
+                                decision["quality"])
+                            sig_row_id = db.save_signal(sig_data)
+                            sig_data["_db_id"] = sig_row_id
+                            sig_data["_created_at"] = time.time()
+                            telegram_bot.notify_signal(sig_data)
+                            all_signals.append(sig_data)
+                            continue
+
+                    # ── Legacy flow (fallback if decision engine unavailable) ──
                     if HAS_GUARDRAILS and _guardrails is not None:
                         try:
                             _eval = _guardrails.evaluate_signal(
@@ -138,35 +229,14 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         except Exception as _ge:
                             logger.error("Guardrail error: %s" % _ge)
 
-                    zt = sig.metadata.get("zone_types", "")
-                    is_top5 = zt in WINNING_ZONE_COMBOS
-                    rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else 0
-                    risk_pct = abs(sig.entry_price - sig.stop_loss) / sig.entry_price * 100 if sig.entry_price else 0
-                    sig_data = {
-                        "instrument": inst, "inst_name": inst_name, "tf": tf,
-                        "direction": sig.direction, "entry": sig.entry_price,
-                        "sl": sig.stop_loss, "tp": sig.take_profit,
-                        "rr": sig.risk_reward_ratio(),
-                        "confluence": sig.metadata.get("smc_confluence", sig.metadata.get("confluence", 0)),
-                        "zone_types": zt, "mss_type": sig.metadata.get("mss_type", "none"),
-                        "rsi": float(rsi) if not pd.isna(rsi) else 0,
-                        "top5": is_top5, "risk_pct": risk_pct,
-                        "session": session_str,
-                    }
-
-                    sig_data["regime"] = regime.get("label", "")
-
                     if is_top5:
-                        # Regime filter — skip for retrace (own quality scoring)
                         if "retrace" not in zt:
                           regime_ok, regime_reason = regime_filter.is_setup_allowed(
                               regime, zt, sig.direction)
                           if not regime_ok:
                               logger.info("  REGIME BLOCKED: %s %s [%s] - %s", inst_name, sig.direction, tf, regime_reason)
-                              # v2.3.4: Regime enforcement
                               continue
 
-                        # Dedup check BEFORE saving
                         is_dup, dup_reason = risk_manager.check_duplicate_signal(
                             inst, sig.direction, tf)
                         if is_dup:
@@ -174,6 +244,37 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             sig_row_id = db.save_signal(sig_data)
                             db.mark_signal(sig_row_id, "skipped")
                             all_signals.append(sig_data)
+                            continue
+
+                        try:
+                            aligned, mtf_adj, mtf_reason = check_mtf_alignment(
+                                inst, sig.direction, client)
+                            if not aligned and MTF_REQUIRED:
+                                logger.info("  MTF BLOCKED: %s %s - %s", inst_name, sig.direction, mtf_reason)
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "mtf_blocked")
+                                all_signals.append(sig_data)
+                                continue
+                            if mtf_adj != 0:
+                                old_conf = sig_data.get("confluence", 0)
+                                sig_data["confluence"] = old_conf + mtf_adj
+                                logger.info("  MTF %s: %s %s conf %d->%d (%s)",
+                                    "ALIGNED" if aligned else "COUNTER",
+                                    inst_name, sig.direction, old_conf,
+                                    sig_data["confluence"], mtf_reason)
+                        except Exception as mtf_err:
+                            logger.warning("  MTF check failed: %s", mtf_err)
+
+                        sig_row_id = db.save_signal(sig_data)
+                        sig_data["_db_id"] = sig_row_id
+                        sig_data["_created_at"] = time.time()
+                        telegram_bot.notify_signal(sig_data)
+                        logger.info("  TOP5: %s %s [%s] | Zones: %s", inst_name, sig.direction, tf, zt)
+                    else:
+                        sig_row_id = db.save_signal(sig_data)
+                        sig_data["_db_id"] = sig_row_id
+
+                    all_signals.append(sig_data)
                             continue
 
 
