@@ -5,6 +5,7 @@ Signal alerts, trade execution, scanner control, risk status, analytics.
 import asyncio
 import logging
 import time
+import json
 import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -34,7 +35,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "2.2.0"
+from version import BOT_VERSION
 
 # Global references
 _app = None
@@ -593,13 +594,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/journal - Signal journal (24h)\n"
         "/journal 4 - Journal for last 4 hours\n"
         "/risk - Risk controls status\n""/regime - Market regime for all instruments\n\n"
-        "<b>Instruments (v2.2.9)</b>\n"
+        "<b>Instruments</b>\n"
         "/instruments - List all instruments\n"
         "/add - Add instrument\n"
         "/remove - Remove instrument\n"
         "/lotsize - Change lot size\n"
         "/pip - Set pip size\n\n"
-        "<b>Trade Validation (v2.2.9)</b>\n"
+        "<b>Trade Validation</b>\n"
         "/validate - Check open trade validity\n\n"
         "<b>Signal Recall (v2.3.3)</b>\n"
         "/recall - Recall signals (last 4h)\n"
@@ -824,14 +825,6 @@ def setup_telegram_app():
 
     app.add_handler(CommandHandler("recall", recall_cmd))
 
-
-    app.add_handler(CommandHandler("instruments", instruments_cmd))
-    app.add_handler(CommandHandler("add", add_instrument_cmd))
-    app.add_handler(CommandHandler("remove", remove_instrument_cmd))
-    app.add_handler(CommandHandler("lotsize", lotsize_cmd))
-    app.add_handler(CommandHandler("pip", pip_cmd))
-    app.add_handler(CommandHandler("validate", validate_cmd))
-    app.add_handler(CommandHandler("validity", validity_cmd))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -840,7 +833,6 @@ def setup_telegram_app():
     app.add_handler(CommandHandler("pending", cmd_pending))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("journal", cmd_journal))
-    app.add_handler(CommandHandler("risk", cmd_risk))
     app.add_handler(CommandHandler("regime", cmd_regime))
     app.add_handler(CommandHandler("about", cmd_about))
     app.add_handler(CommandHandler("help", cmd_help))
