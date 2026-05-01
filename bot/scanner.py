@@ -275,40 +275,6 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         sig_data["_db_id"] = sig_row_id
 
                     all_signals.append(sig_data)
-                            continue
-
-
-                        # -- MTF Confluence Check --
-                        try:
-                            aligned, mtf_adj, mtf_reason = check_mtf_alignment(
-                                inst, sig.direction, client)
-                            if not aligned and MTF_REQUIRED:
-                                logger.info("  MTF BLOCKED: %s %s - %s", inst_name, sig.direction, mtf_reason)
-                                sig_row_id = db.save_signal(sig_data)
-                                db.mark_signal(sig_row_id, "mtf_blocked")
-                                all_signals.append(sig_data)
-                                continue
-                            if mtf_adj != 0:
-                                old_conf = sig_data.get("confluence", 0)
-                                sig_data["confluence"] = old_conf + mtf_adj
-                                logger.info("  MTF %s: %s %s conf %d->%d (%s)",
-                                    "ALIGNED" if aligned else "COUNTER",
-                                    inst_name, sig.direction, old_conf,
-                                    sig_data["confluence"], mtf_reason)
-                        except Exception as mtf_err:
-                            logger.warning("  MTF check failed: %s", mtf_err)
-
-                        # Save then notify with Execute buttons
-                        sig_row_id = db.save_signal(sig_data)
-                        sig_data["_db_id"] = sig_row_id
-                        sig_data["_created_at"] = time.time()
-                        telegram_bot.notify_signal(sig_data)
-                        logger.info("  TOP5: %s %s [%s] | Zones: %s", inst_name, sig.direction, tf, zt)
-                    else:
-                        sig_row_id = db.save_signal(sig_data)
-                        sig_data["_db_id"] = sig_row_id
-
-                    all_signals.append(sig_data)
             except Exception as e:
                 db.log_error("strategy", f"Scan error {inst}/{tf}", traceback.format_exc())
                 logger.info("  SCAN ERROR %s/%s: %s", inst, tf, e)
