@@ -60,7 +60,7 @@ def check_structure_validity(direction, entry_price, current_price, highs, lows,
         last_3_lows = relevant_lows[:3]
         if len(last_3_lows) >= 2:
             if last_3_lows[0]["price"] < last_3_lows[1]["price"]:
-                return True, f"Warning: lower lows forming ({last_3_lows[0]['price']:.5f} < {last_3_lows[1]['price']:.5f})", invalidation
+                return True, f"Warning: lower lows forming ({last_3_lows[0]['price']:.5f} &lt; {last_3_lows[1]['price']:.5f})", invalidation
         
         distance_pct = ((current_price - invalidation) / current_price) * 100
         return True, f"Structure intact (inv: {invalidation:.5f}, {distance_pct:.2f}% away)", invalidation
@@ -84,7 +84,7 @@ def check_structure_validity(direction, entry_price, current_price, highs, lows,
         last_3_highs = relevant_highs[:3]
         if len(last_3_highs) >= 2:
             if last_3_highs[0]["price"] > last_3_highs[1]["price"]:
-                return True, f"Warning: higher highs forming ({last_3_highs[0]['price']:.5f} > {last_3_highs[1]['price']:.5f})", invalidation
+                return True, f"Warning: higher highs forming ({last_3_highs[0]['price']:.5f} &gt; {last_3_highs[1]['price']:.5f})", invalidation
         
         distance_pct = ((invalidation - current_price) / current_price) * 100
         return True, f"Structure intact (inv: {invalidation:.5f}, {distance_pct:.2f}% away)", invalidation
