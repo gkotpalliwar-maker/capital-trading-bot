@@ -23,12 +23,12 @@ def check_structure_validity(direction, entry_price, current_price, highs, lows,
     """Check if the market structure that justified the trade is still valid.
     
     For a BUY trade (bullish MSS/BOS):
-      - Structure valid if price hasn't broken below the swing low that preceded the entry
-      - Invalidated if price makes a lower low below the entry swing structure
+      - Structure valid if price hasn't broken below swing lows BELOW entry
+      - Ignores swing lows at/above entry (those formed after entry)
     
     For a SELL trade (bearish MSS/BOS):
-      - Structure valid if price hasn't broken above the swing high that preceded the entry
-      - Invalidated if price makes a higher high above the entry swing structure
+      - Structure valid if price hasn't broken above swing highs ABOVE entry
+      - Ignores swing highs at/below entry (entry was near these by design)
     
     Returns: (is_valid, reason, invalidation_level)
     """
@@ -36,27 +36,29 @@ def check_structure_validity(direction, entry_price, current_price, highs, lows,
     if not swings:
         return True, "Insufficient data for structure check", None
 
-    # Find the swing point closest to (but before) entry price
-    # This represents the structure level the trade was based on
+    # Buffer: 0.15% of entry price — avoids false triggers at entry-level swings
+    buffer = entry_price * 0.0015
+
     if direction == "BUY":
-        # For BUY: find the swing low that the bullish MSS broke above
-        # The invalidation is if price drops below this swing low
+        # For BUY: invalidation = price drops below swing lows that are BELOW entry
         recent_lows = [s for s in swings if s["type"] == "low"]
         if not recent_lows:
             return True, "No swing lows found", None
         
-        # Find swing lows near entry price (within reasonable range)
-        # Use the most recent swing low before or near entry
-        relevant_lows = sorted(recent_lows, key=lambda s: s["index"], reverse=True)
+        # Only consider swing lows meaningfully BELOW entry price
+        qualifying_lows = [s for s in recent_lows if s["price"] < entry_price - buffer]
         
-        # The invalidation level is the lowest recent swing low
-        # (the structure level that should hold for the trade to remain valid)
+        if not qualifying_lows:
+            # All swing lows are near/above entry — trade just entered, structure OK
+            return True, "Structure intact (recently entered, no qualifying swing lows below entry)", None
+        
+        relevant_lows = sorted(qualifying_lows, key=lambda s: s["index"], reverse=True)
         invalidation = min(s["price"] for s in relevant_lows[:3])
         
         if current_price < invalidation:
             return False, f"Structure broken: price {current_price:.5f} below swing low {invalidation:.5f}", invalidation
         
-        # Check if new lower lows are forming (bearish structure shift)
+        # Check if new lower lows forming
         last_3_lows = relevant_lows[:3]
         if len(last_3_lows) >= 2:
             if last_3_lows[0]["price"] < last_3_lows[1]["price"]:
@@ -66,21 +68,25 @@ def check_structure_validity(direction, entry_price, current_price, highs, lows,
         return True, f"Structure intact (inv: {invalidation:.5f}, {distance_pct:.2f}% away)", invalidation
 
     else:  # SELL
-        # For SELL: find the swing high the bearish MSS broke below
-        # Invalidation is if price rises above this swing high
+        # For SELL: invalidation = price rises above swing highs ABOVE entry
         recent_highs = [s for s in swings if s["type"] == "high"]
         if not recent_highs:
             return True, "No swing highs found", None
         
-        relevant_highs = sorted(recent_highs, key=lambda s: s["index"], reverse=True)
+        # Only consider swing highs meaningfully ABOVE entry price
+        qualifying_highs = [s for s in recent_highs if s["price"] > entry_price + buffer]
         
-        # Invalidation = highest recent swing high
+        if not qualifying_highs:
+            # All swing highs are near/below entry — trade just entered, structure OK
+            return True, "Structure intact (recently entered, no qualifying swing highs above entry)", None
+        
+        relevant_highs = sorted(qualifying_highs, key=lambda s: s["index"], reverse=True)
         invalidation = max(s["price"] for s in relevant_highs[:3])
         
         if current_price > invalidation:
             return False, f"Structure broken: price {current_price:.5f} above swing high {invalidation:.5f}", invalidation
         
-        # Check if new higher highs forming (bullish structure shift)
+        # Check if new higher highs forming
         last_3_highs = relevant_highs[:3]
         if len(last_3_highs) >= 2:
             if last_3_highs[0]["price"] > last_3_highs[1]["price"]:
