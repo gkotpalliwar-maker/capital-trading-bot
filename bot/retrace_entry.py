@@ -1,6 +1,7 @@
 
-# bot/retrace_entry.py — v2.9.0
+# bot/retrace_entry.py — v2.11.0
 # Retrace-Entry Strategy: Wait for impulse retrace, enter on confirmation
+# v2.11.0: Proximity-filtered swing SL + TP cap (backtest validated)
 from __future__ import annotations
 
 import logging
@@ -21,11 +22,18 @@ DEFAULT_CONFIG = {
     "engulf_body_ratio": 0.50,  # Min body/range ratio for entry candle
     "sl_buffer_pct": 0.20,      # SL buffer beyond origin (% of impulse range)
     "tp_extension": 0.50,       # TP extension beyond impulse (% of range)
-    "min_rr": 1.0,              # Minimum risk:reward ratio
+    "min_rr": 1.5,              # Minimum risk:reward ratio (v2.11.0: raised from 1.0)
     "max_impulse_age": 20,      # Max candles to look back for origin
     "base_confluence": 8,       # Base confluence for retrace signals
     "max_signal_age": 20,       # Only return signals from last N candles (retrace needs ~15)
     "min_risk_atr": 0.3,        # Min risk as fraction of ATR (filters tiny SL)
+    # v2.11.0: Swing-based SL (proximity-filtered)
+    "swing_sl_enabled": True,   # Enable swing-based SL floor
+    "swing_lookback": 5,        # Candles each side to define swing point
+    "swing_buffer_pct": 0.0015, # Buffer beyond swing HH/LL (0.15%)
+    "swing_max_dist_atr": 1.5,  # Only consider swings within 1.5×ATR of entry
+    # v2.11.0: TP cap
+    "tp_cap_rr": 4.0,           # Max R:R for TP (0 = disabled). Caps ambitious targets.
 }
 
 
@@ -37,7 +45,7 @@ class RetraceEntryScanner:
         2. Origin: last opposing candle before the impulse
         3. Retrace: price pulls back >= 50% toward origin
         4. Entry: strong engulfing candle in impulse direction
-        5. SL: beyond origin + buffer | TP: impulse extreme + extension
+        5. SL: max(origin+buffer, nearest_swing+buffer) | TP: capped at 4R
     """
 
     def __init__(self, config: Optional[Dict] = None):
@@ -45,7 +53,9 @@ class RetraceEntryScanner:
         logger.info(f"RetraceEntryScanner initialized: "
                     f"impulse={self.config['impulse_len']}, "
                     f"min_retrace={self.config['min_retrace_pct']}%, "
-                    f"min_rr={self.config['min_rr']}")
+                    f"min_rr={self.config['min_rr']}, "
+                    f"swing_sl={self.config['swing_sl_enabled']}, "
+                    f"tp_cap={self.config['tp_cap_rr']}R")
 
     def scan(self, df: pd.DataFrame, instrument: str = "",
              timeframe: str = "") -> List[Dict]:
@@ -73,6 +83,8 @@ class RetraceEntryScanner:
         base_conf = cfg["base_confluence"]
         max_signal_age = cfg.get("max_signal_age", 5)
         min_risk_atr = cfg.get("min_risk_atr", 0.3)
+        swing_sl_enabled = cfg.get("swing_sl_enabled", True)
+        tp_cap_rr = cfg.get("tp_cap_rr", 4.0)
 
         if n < impulse_len + max_wait + 5:
             return []
@@ -117,14 +129,38 @@ class RetraceEntryScanner:
 
             entry_idx, entry_price, retrace_pct = entry
 
-            # ── STEP 4: Calculate SL & TP ──
+            # ── STEP 4: Calculate SL & TP (v2.11.0: swing SL + TP cap) ──
+            # 4a. Origin-based SL (original approach)
             if direction == "SELL":
-                sl = origin_price + impulse_range * sl_buffer
+                origin_sl = origin_price + impulse_range * sl_buffer
+            else:
+                origin_sl = origin_price - impulse_range * sl_buffer
+
+            # 4b. Swing-based SL floor (v2.11.0)
+            swing_sl = None
+            atr_at_entry = None
+            if has_atr and not pd.isna(df["atr"].iloc[entry_idx]):
+                atr_at_entry = float(df["atr"].iloc[entry_idx])
+
+            if swing_sl_enabled and atr_at_entry and atr_at_entry > 0:
+                swing_sl = self._find_nearest_swing_sl(
+                    df, entry_idx, entry_price, direction, atr_at_entry, cfg
+                )
+
+            # 4c. Final SL = max protection level
+            if direction == "SELL":
+                sl = origin_sl
+                if swing_sl is not None and swing_sl > sl:
+                    sl = swing_sl
+                    logger.debug(f"Swing SL widened: {origin_sl:.5f} → {sl:.5f} ({instrument})")
                 tp = impulse_extreme - impulse_range * tp_ext
                 risk = sl - entry_price
                 reward = entry_price - tp
             else:
-                sl = origin_price - impulse_range * sl_buffer
+                sl = origin_sl
+                if swing_sl is not None and swing_sl < sl:
+                    sl = swing_sl
+                    logger.debug(f"Swing SL widened: {origin_sl:.5f} → {sl:.5f} ({instrument})")
                 tp = impulse_extreme + impulse_range * tp_ext
                 risk = entry_price - sl
                 reward = tp - entry_price
@@ -133,24 +169,29 @@ class RetraceEntryScanner:
                 i += 1
                 continue
 
+            # 4d. TP cap (v2.11.0): limit ambitious targets
             rr_ratio = reward / risk
+            if tp_cap_rr > 0 and rr_ratio > tp_cap_rr:
+                if direction == "SELL":
+                    tp = entry_price - risk * tp_cap_rr
+                else:
+                    tp = entry_price + risk * tp_cap_rr
+                reward = risk * tp_cap_rr
+                rr_ratio = tp_cap_rr
+                logger.debug(f"TP capped at {tp_cap_rr}R: tp={tp:.5f} ({instrument})")
+
+            # 4e. Min R:R gate (after swing adjustment)
             if rr_ratio < min_rr:
                 i += 1
                 continue
 
-            # Filter: minimum risk must be meaningful (avoid 0.66 pt SL)
-            if has_atr and not pd.isna(df["atr"].iloc[entry_idx]):
-                atr_at_entry = float(df["atr"].iloc[entry_idx])
-                if atr_at_entry > 0 and risk < atr_at_entry * min_risk_atr:
-                    i += 1
-                    continue
+            # Filter: minimum risk must be meaningful (avoid tiny SL)
+            if atr_at_entry and atr_at_entry > 0 and risk < atr_at_entry * min_risk_atr:
+                i += 1
+                continue
 
             # ── STEP 5: Build signal ──
-            # ATR-based position sizing hint
-            atr_val = None
-            if has_atr and not pd.isna(df["atr"].iloc[entry_idx]):
-                atr_val = float(df["atr"].iloc[entry_idx])
-
+            atr_val = atr_at_entry
             rsi_val = None
             if has_rsi and not pd.isna(df["rsi"].iloc[entry_idx]):
                 rsi_val = float(df["rsi"].iloc[entry_idx])
@@ -172,12 +213,22 @@ class RetraceEntryScanner:
             # Bonus: ATR confirms volatility is reasonable
             if atr_val and impulse_range < atr_val * 3:
                 confluence += 1  # not a crazy spike
+            # v2.11.0: Bonus for swing-protected SL
+            if swing_sl is not None:
+                confluence += 1  # structural SL = higher confidence
+
+            # Determine SL mode used for metadata
+            sl_mode = "origin"
+            if swing_sl is not None:
+                if direction == "SELL" and swing_sl >= origin_sl:
+                    sl_mode = "swing"
+                elif direction == "BUY" and swing_sl <= origin_sl:
+                    sl_mode = "swing"
 
             signal = {
                 "strategy": "retrace_entry",
                 "direction": direction,
                 "entry": round(float(entry_price), 5),
-                "entry_price": round(float(entry_price), 5),
                 "entry_price": round(float(entry_price), 5),
                 "sl": round(float(sl), 5),
                 "tp": round(float(tp), 5),
@@ -194,6 +245,7 @@ class RetraceEntryScanner:
                 "atr": atr_val,
                 "zone_types": f"retrace+{direction.lower()}",
                 "mss_type": "retrace_entry",
+                "sl_mode": sl_mode,  # v2.11.0: track which SL was used
             }
 
             signals.append(signal)
@@ -212,6 +264,7 @@ class RetraceEntryScanner:
                     f"Retrace {s['direction']}: {instrument} {timeframe} "
                     f"entry={s['entry']:.5f} R:R={s['rr_ratio']:.1f} "
                     f"retrace={s['retrace_pct']:.0f}% conf={s['confluence']} "
+                    f"sl_mode={s['sl_mode']} "
                     f"(filtered {pre_filter}->{len(signals)})"
                 )
         return signals
@@ -276,6 +329,75 @@ class RetraceEntryScanner:
             impulse_range = impulse_extreme - origin_price
 
         return (origin_idx, origin_price, impulse_extreme, impulse_range)
+
+    def _find_nearest_swing_sl(
+        self, df: pd.DataFrame, entry_idx: int, entry_price: float,
+        direction: str, atr_val: float, cfg: Dict
+    ) -> Optional[float]:
+        """Find nearest swing-based SL level (proximity-filtered).
+
+        v2.11.0: Only considers swings within swing_max_dist_atr × ATR
+        of the entry price. Returns the nearest qualifying swing + buffer.
+
+        For SELL: nearest swing HIGH above entry (structural invalidation)
+        For BUY: nearest swing LOW below entry (structural invalidation)
+        """
+        swing_lookback = cfg.get("swing_lookback", 5)
+        swing_buffer_pct = cfg.get("swing_buffer_pct", 0.0015)
+        max_dist_atr = cfg.get("swing_max_dist_atr", 1.5)
+        max_dist = atr_val * max_dist_atr
+
+        # Scan candles before entry for swing points
+        start_idx = max(swing_lookback, entry_idx - 50)
+        end_idx = entry_idx  # Don't include entry candle itself
+
+        if end_idx - start_idx < swing_lookback * 2:
+            return None
+
+        if direction == "SELL":
+            # Find swing highs above entry, within max_dist
+            candidates = []
+            for idx in range(start_idx + swing_lookback, end_idx - swing_lookback):
+                window = df.iloc[idx - swing_lookback:idx + swing_lookback + 1]
+                if float(df["high"].iloc[idx]) == float(window["high"].max()):
+                    price = float(df["high"].iloc[idx])
+                    dist = price - entry_price
+                    if dist > 0 and dist < max_dist:
+                        candidates.append(price)
+
+            if candidates:
+                # Use nearest (smallest distance above entry)
+                nearest = min(candidates)
+                return nearest * (1 + swing_buffer_pct)
+            else:
+                # Fallback: highest high in last 10 bars before entry + buffer
+                recent_high = float(df["high"].iloc[max(0, entry_idx - 10):entry_idx].max())
+                dist = recent_high - entry_price
+                if dist > 0 and dist < max_dist:
+                    return recent_high * (1 + swing_buffer_pct)
+                return None
+        else:
+            # Find swing lows below entry, within max_dist
+            candidates = []
+            for idx in range(start_idx + swing_lookback, end_idx - swing_lookback):
+                window = df.iloc[idx - swing_lookback:idx + swing_lookback + 1]
+                if float(df["low"].iloc[idx]) == float(window["low"].min()):
+                    price = float(df["low"].iloc[idx])
+                    dist = entry_price - price
+                    if dist > 0 and dist < max_dist:
+                        candidates.append(price)
+
+            if candidates:
+                # Use nearest (smallest distance below entry)
+                nearest = max(candidates)
+                return nearest * (1 - swing_buffer_pct)
+            else:
+                # Fallback: lowest low in last 10 bars before entry - buffer
+                recent_low = float(df["low"].iloc[max(0, entry_idx - 10):entry_idx].min())
+                dist = entry_price - recent_low
+                if dist > 0 and dist < max_dist:
+                    return recent_low * (1 - swing_buffer_pct)
+                return None
 
     def _find_retrace_entry(
         self, df: pd.DataFrame, impulse_end: int, direction: str,
