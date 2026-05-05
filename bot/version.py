@@ -1,5 +1,3 @@
-"""Single source of truth for bot version."""
-
-BOT_VERSION = "2.10.0"
-BUILD_NAME = "signal-decision-engine"
-RELEASE_DATE = "2026-05-01"
+# bot/version.py
+__version__ = "2.11.0"
+__codename__ = "swing-sl-resilience"
