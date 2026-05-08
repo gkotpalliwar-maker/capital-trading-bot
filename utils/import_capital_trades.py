@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Import Capital.com trades v5 - hardcoded from TradingView order history.
-Extracted from TradingView Trading Panel (5/4 - 5/8 2026).
-No API calls needed - direct DB insert.
-"""
-import sys, sqlite3
+"""Import Capital.com trades v6 - fixes deal_id NOT NULL constraint."""
+import sys, sqlite3, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = Path("/opt/trading-bot/data/bot.db")
 
 print("=" * 70)
-print("  IMPORT TRADES -> bot.db (v5 - from TradingView history)")
+print("  IMPORT TRADES -> bot.db (v6 - from TradingView history)")
 print("=" * 70)
 
 SGD_RATE = 1.33
@@ -62,6 +59,7 @@ for epic, direction, entry, exit_p, qty, ts_str in RAW_TRADES:
         "timestamp": ts_str, "session": sess,
         "zone_types": zone, "mss_type": mss,
         "timeframe": "H1", "confluence": 7,
+        "deal_id": f"manual-import-{uuid.uuid4().hex[:16]}",
     })
 
 # Display
@@ -119,6 +117,7 @@ for t in trades:
         "pnl": t["pnl"], "timeframe": t["timeframe"],
         "zone_types": t["zone_types"], "mss_type": t["mss_type"],
         "confluence": t["confluence"], "session": t["session"],
+        "deal_id": t["deal_id"],
     }
     valid = {k: v for k, v in data.items() if k in columns}
     try:
