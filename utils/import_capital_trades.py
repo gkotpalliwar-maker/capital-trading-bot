@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import Capital.com trades v6 - fixes deal_id NOT NULL constraint."""
+"""Import Capital.com trades v7 - handles all NOT NULL constraints."""
 import sys, sqlite3, uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,8 +7,39 @@ from pathlib import Path
 DB_PATH = Path("/opt/trading-bot/data/bot.db")
 
 print("=" * 70)
-print("  IMPORT TRADES -> bot.db (v6 - from TradingView history)")
+print("  IMPORT TRADES -> bot.db (v7 - from TradingView history)")
 print("=" * 70)
+
+# First: dump table schema to show all constraints
+conn = sqlite3.connect(str(DB_PATH))
+cursor = conn.cursor()
+cursor.execute("PRAGMA table_info(trades)")
+schema = cursor.fetchall()
+print(f"\n  TABLE SCHEMA (trades):")
+print(f"  {'Col':<20} {'Type':<12} {'NotNull':<8} {'Default':<10} {'PK'}")
+print(f"  {'-'*20} {'-'*12} {'-'*8} {'-'*10} {'-'*3}")
+not_null_cols = []
+all_cols = []
+for row in schema:
+    cid, name, ctype, notnull, default, pk = row
+    print(f"  {name:<20} {ctype:<12} {'YES' if notnull else ''::<8} {str(default or ''):<10} {'PK' if pk else ''}")
+    all_cols.append(name)
+    if notnull and not pk:
+        not_null_cols.append(name)
+
+print(f"\n  NOT NULL columns (must provide): {not_null_cols}")
+print(f"  All columns: {all_cols}")
+
+# Get a sample existing trade to see what fields are populated
+cursor.execute("SELECT * FROM trades WHERE id=1")
+sample = cursor.fetchone()
+if sample:
+    print(f"\n  Sample trade (id=1):")
+    for col, val in zip(all_cols, sample):
+        if val is not None:
+            print(f"    {col}: {val}")
+
+conn.close()
 
 SGD_RATE = 1.33
 
@@ -54,12 +85,24 @@ for epic, direction, entry, exit_p, qty, ts_str in RAW_TRADES:
         mss = "bullish_mss"
 
     trades.append({
-        "epic": epic, "direction": direction,
-        "entry_price": entry, "pnl": pnl_sgd,
-        "timestamp": ts_str, "session": sess,
-        "zone_types": zone, "mss_type": mss,
-        "timeframe": "H1", "confluence": 7,
-        "deal_id": f"manual-import-{uuid.uuid4().hex[:16]}",
+        "epic": epic,
+        "instrument": epic,  # NOT NULL
+        "direction": direction,
+        "entry_price": entry,
+        "pnl": pnl_sgd,
+        "timestamp": ts_str,
+        "session": sess,
+        "zone_types": zone,
+        "mss_type": mss,
+        "timeframe": "H1",
+        "confluence": 7,
+        "deal_id": f"manual-{uuid.uuid4().hex[:16]}",
+        "status": "closed",
+        # Fill other likely NOT NULL fields with defaults
+        "size": qty,
+        "sl_price": 0,
+        "tp_price": 0,
+        "ml_score": 0,
     })
 
 # Display
@@ -110,16 +153,8 @@ for t in trades:
         skipped += 1
         continue
 
-    data = {
-        "epic": t["epic"], "direction": t["direction"],
-        "entry_price": t["entry_price"],
-        "timestamp": t["timestamp"], "status": "closed",
-        "pnl": t["pnl"], "timeframe": t["timeframe"],
-        "zone_types": t["zone_types"], "mss_type": t["mss_type"],
-        "confluence": t["confluence"], "session": t["session"],
-        "deal_id": t["deal_id"],
-    }
-    valid = {k: v for k, v in data.items() if k in columns}
+    # Only include fields that exist in the table
+    valid = {k: v for k, v in t.items() if k in columns}
     try:
         cols = ", ".join(valid.keys())
         phs = ", ".join(["?"] * len(valid))
@@ -127,6 +162,10 @@ for t in trades:
         inserted += 1
     except Exception as e:
         print(f"    ERR: {e}")
+        # On first error, show what we tried to insert
+        if inserted == 0 and skipped <= 2:
+            print(f"    Attempted cols: {list(valid.keys())}")
+            break
 
 conn.commit()
 cursor.execute("SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl IS NOT NULL")
