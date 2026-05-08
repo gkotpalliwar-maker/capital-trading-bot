@@ -13,13 +13,10 @@ print("=" * 70)
 print("  IMPORT TRADES -> bot.db (v5 - from TradingView history)")
 print("=" * 70)
 
-# All round-trip trades matched from TradingView order history
-# Times converted from SGT (UTC+8) to UTC
-# PnL approx SGD (USD * 1.33)
 SGD_RATE = 1.33
 
+# (epic, direction, entry, exit, qty, open_time_utc)
 RAW_TRADES = [
-    # (epic, direction, entry, exit, qty, open_time_utc)
     ("EURUSD", "BUY", 1.17329, 1.17185, 2000, "2026-05-04T04:16:00+00:00"),
     ("US100", "SELL", 27792.3, 27561.9, 0.2, "2026-05-04T09:45:00+00:00"),
     ("OIL_CRUDE", "BUY", 102.27, 101.789, 30, "2026-05-05T06:59:00+00:00"),
