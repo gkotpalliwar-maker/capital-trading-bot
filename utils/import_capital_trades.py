@@ -1,175 +1,99 @@
 #!/usr/bin/env python3
-"""Import Capital.com trades v4 — interactive direction input.
-Capital.com API doesn't expose direction in activity/confirms/transactions.
-This script fetches PnL from transactions, then asks user for direction.
+"""Import Capital.com trades v5 — hardcoded from TradingView order history.
+Extracted from TradingView Trading Panel export (5/1 - 5/8 2026).
+No API calls needed — direct DB insert.
 """
-import os, sys, sqlite3, requests
+import sys, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-env_path = Path("/opt/trading-bot/.env")
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
-
-API_KEY = os.getenv("CAPITAL_API_KEY")
-API_URL = os.getenv("CAPITAL_API_URL", "https://api-capital.backend-capital.com")
-EMAIL = os.getenv("CAPITAL_EMAIL")
-PASSWORD = os.getenv("CAPITAL_PASSWORD")
 DB_PATH = Path("/opt/trading-bot/data/bot.db")
 
-if not all([API_KEY, EMAIL, PASSWORD]):
-    print("ERROR: Missing credentials"); sys.exit(1)
-
 print("=" * 70)
-print("  IMPORT CAPITAL.COM TRADES -> bot.db (v4 — interactive)")
+print("  IMPORT TRADES -> bot.db (v5 — from TradingView history)")
 print("=" * 70)
 
-# ── Auth ──
-print("\n  Authenticating...")
-session = requests.Session()
-resp = session.post(f"{API_URL}/api/v1/session", json={
-    "identifier": EMAIL, "password": PASSWORD
-}, headers={"X-CAP-API-KEY": API_KEY})
-if resp.status_code != 200:
-    print(f"  ERROR: {resp.status_code}: {resp.text}"); sys.exit(1)
-session.headers.update({
-    "CST": resp.headers.get("CST"),
-    "X-SECURITY-TOKEN": resp.headers.get("X-SECURITY-TOKEN"),
-    "X-CAP-API-KEY": API_KEY
-})
-print("  OK")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ALL ROUND-TRIP TRADES extracted from TradingView order history
+# Format: (epic, direction, entry, close, qty, open_time, close_time)
+# PnL calculated: (close-entry)*qty for BUY, (entry-close)*qty for SELL
+# Then converted to SGD (approx rate 1.33)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SGD_RATE = 1.33  # Approximate USD->SGD for May 2026
 
-# ── Fetch transactions (reliable PnL source) ──
-print("\n  Fetching transactions (last 24h)...")
-tx_resp = session.get(f"{API_URL}/api/v1/history/transactions", params={
-    "lastPeriod": 86400, "type": "TRADE"
-})
-if tx_resp.status_code != 200:
-    print(f"  Transactions failed: {tx_resp.status_code}")
-    # Try without type filter
-    tx_resp = session.get(f"{API_URL}/api/v1/history/transactions", params={"lastPeriod": 86400})
+RAW_TRADES = [
+    # (epic, direction, entry_price, close_price, qty, open_time_utc, close_time_utc)
+    ("EURUSD",    "BUY",  1.17329, 1.17185, 2000, "2026-05-04T04:16:00", "2026-05-04T07:43:00"),
+    ("US100",     "SELL", 27792.3, 27561.9, 0.2,  "2026-05-04T09:45:00", "2026-05-04T10:07:00"),
+    ("OIL_CRUDE", "BUY",  102.27,  101.789, 30,   "2026-05-05T06:59:00", "2026-05-05T07:02:00"),
+    ("GOLD",      "BUY",  4557.09, 4583.56, 0.8,  "2026-05-05T11:33:00", "2026-05-05T13:18:00"),
+    ("EURUSD",    "BUY",  1.17106, 1.17001, 6000, "2026-05-05T15:53:00", "2026-05-05T16:18:00"),
+    ("GOLD",      "BUY",  4624.81, 4637.45, 0.8,  "2026-05-06T01:39:00", "2026-05-06T02:47:00"),
+    ("EURUSD",    "BUY",  1.17391, 1.17731, 2000, "2026-05-06T08:03:00", "2026-05-06T09:41:00"),
+    ("OIL_CRUDE", "BUY",  96.661,  95.955,  30,   "2026-05-06T08:17:00", "2026-05-06T08:50:00"),
+    ("GOLD",      "BUY",  4685.13, 4678.99, 1,    "2026-05-06T12:27:00", "2026-05-06T12:55:00"),
+    ("OIL_CRUDE", "BUY",  93.061,  94.499,  30,   "2026-05-06T12:43:00", "2026-05-06T13:09:00"),
+    ("CADCHF",    "BUY",  0.57284, 0.57217, 10000,"2026-05-06T14:11:00", "2026-05-06T14:41:00"),
+    ("US100",     "SELL", 28553.2, 28612.0, 0.1,  "2026-05-07T01:23:00", "2026-05-07T05:41:00"),
+    ("ETHUSD",    "BUY",  2337.12, 2305.87, 0.9,  "2026-05-07T08:35:00", "2026-05-07T13:47:00"),
+    ("OIL_CRUDE", "BUY",  89.387,  89.809,  30,   "2026-05-07T14:36:00", "2026-05-07T15:07:00"),
+    ("OIL_CRUDE", "BUY",  90.351,  90.993,  30,   "2026-05-07T15:46:00", "2026-05-07T15:57:00"),
+    ("GOLD",      "SELL", 4727.21, 4713.89, 1,    "2026-05-07T16:03:00", "2026-05-07T16:12:00"),
+    ("GOLD",      "BUY",  4720.22, 4706.89, 1,    "2026-05-08T02:33:00", "2026-05-08T02:38:00"),
+    ("US500",     "BUY",  7353.1,  7370.0,  0.9,  "2026-05-08T04:40:00", "2026-05-08T08:21:00"),
+]
 
-transactions = tx_resp.json().get("transactions", [])
-print(f"  Raw transactions: {len(transactions)}")
-
-# Filter to actual trades (non-zero PnL)
-EPIC_MAP = {
-    "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
-    "Gold": "GOLD", "GOLD": "GOLD", "US Tech 100": "US100",
-    "US 500": "US500", "US500": "US500", "Oil - Crude": "OIL_CRUDE",
-    "OIL_CRUDE": "OIL_CRUDE", "Bitcoin": "BTCUSD", "BTCUSD": "BTCUSD",
-    "Ethereum": "ETHUSD", "ETHUSD": "ETHUSD",
-}
-def norm_epic(raw):
-    if raw in EPIC_MAP:
-        return EPIC_MAP[raw]
-    for k, v in EPIC_MAP.items():
-        if k.lower() in raw.lower():
-            return v
-    return raw.upper().replace(" ", "")
-
-trades_raw = []
-for tx in transactions:
-    pnl_str = str(tx.get("size", "0"))
-    pnl = float(pnl_str.replace("SGD", "").replace(",", "").strip() or "0")
-    if pnl == 0:
-        continue  # Skip zero-PnL (fees, adjustments)
-    epic_raw = tx.get("instrumentName", "")
-    date_str = tx.get("dateUtc", tx.get("date", ""))
-    trades_raw.append({
-        "epic_raw": epic_raw,
-        "epic": norm_epic(epic_raw),
-        "pnl": pnl,
-        "date": date_str,
-        "dealId": tx.get("dealId", ""),
-    })
-
-if not trades_raw:
-    print("\n  No trades with PnL found in last 24h.")
-    print("  Try running during market hours or after recent trades close.")
-    sys.exit(0)
-
-# ── Display and ask for directions ──
-print(f"\n  Found {len(trades_raw)} trades with PnL:")
-print(f"  {'#':>3} {'Epic':<12} {'PnL':>8} {'Date':<20}")
-print(f"  {'-'*3} {'-'*12} {'-'*8} {'-'*20}")
-for i, t in enumerate(trades_raw, 1):
-    print(f"  {i:>3} {t['epic']:<12} {t['pnl']:>+7.2f} {t['date'][:19]}")
-
-print(f"\n  Enter direction for each trade (B=BUY, S=SELL, X=skip):")
-print(f"  You can also type all at once, e.g. 'SBSBSX' for 6 trades.")
-print()
-
-# Get input
-user_input = input("  Directions: ").strip().upper()
-if len(user_input) == len(trades_raw):
-    # Single string like "BSSBBX"
-    directions = list(user_input)
-else:
-    # Space-separated or comma-separated
-    directions = [d.strip() for d in user_input.replace(",", " ").split()]
-
-if len(directions) != len(trades_raw):
-    print(f"\n  ERROR: Expected {len(trades_raw)} directions, got {len(directions)}")
-    print(f"  Please enter exactly {len(trades_raw)} characters (B/S/X)")
-    sys.exit(1)
-
-# ── Build valid trades ──
+# Calculate PnL in SGD
 trades = []
-for t, d in zip(trades_raw, directions):
-    if d == "X":
-        continue
-    direction = "BUY" if d == "B" else "SELL" if d == "S" else None
-    if not direction:
-        print(f"  WARNING: Unknown direction '{d}' for {t['epic']}, skipping")
-        continue
+for epic, direction, entry, close, qty, open_t, close_t in RAW_TRADES:
+    if direction == "BUY":
+        pnl_usd = (close - entry) * qty
+    else:
+        pnl_usd = (entry - close) * qty
+    pnl_sgd = round(pnl_usd * SGD_RATE, 2)
     
-    ts = datetime.now(timezone.utc)
-    if t["date"]:
-        try: ts = datetime.fromisoformat(t["date"].replace("Z", "+00:00"))
-        except:
-            try: ts = datetime.strptime(t["date"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-            except: pass
-    
+    ts = datetime.fromisoformat(open_t).replace(tzinfo=timezone.utc)
     hour = ts.hour
-    sess = "asian" if hour < 7 else "london" if hour < 12 else "new_york" if hour < 21 else "late"
     day = ts.strftime("%A")
+    sess = "asian" if hour < 7 else "london" if hour < 12 else "new_york" if hour < 21 else "late"
+    
+    # Tag based on direction + instrument patterns
+    if direction == "SELL":
+        zone = "bearish+mss+sell"
+        mss = "bearish_mss"
+    else:
+        zone = "bullish+mss+buy"
+        mss = "bullish_mss"
     
     trades.append({
-        "epic": t["epic"], "direction": direction,
-        "entry_price": 0,  # Not available from API
-        "pnl": t["pnl"], "timestamp": ts.isoformat(),
-        "session": sess, "day": day,
-        "zone_types": f"{'bearish' if direction == 'SELL' else 'bullish'}+mss+{direction.lower()}",
-        "mss_type": f"{'bearish' if direction == 'SELL' else 'bullish'}_mss",
+        "epic": epic, "direction": direction,
+        "entry_price": entry, "pnl": pnl_sgd,
+        "timestamp": open_t, "session": sess,
+        "zone_types": zone, "mss_type": mss,
         "timeframe": "H1", "confluence": 7,
     })
 
-# ── Summary ──
-print(f"\n  Valid trades to import: {len(trades)}")
-print(f"  {'#':>3} {'Epic':<12} {'Dir':<5} {'PnL':>8} {'Date':<16} {'Session':<8} {'Day'}")
-print(f"  {'-'*3} {'-'*12} {'-'*5} {'-'*8} {'-'*16} {'-'*8} {'-'*9}")
+# Display
+print(f"\n  Trades from TradingView: {len(trades)}")
+print(f"  {'#':>3} {'Epic':<12} {'Dir':<5} {'Entry':>10} {'PnL SGD':>9} {'Date':<16} {'Session':<8} {'W/L'}")
+print(f"  {'-'*3} {'-'*12} {'-'*5} {'-'*10} {'-'*9} {'-'*16} {'-'*8} {'-'*3}")
 w, l = 0, 0
 for i, t in enumerate(trades, 1):
+    wl = "W" if t["pnl"] > 0 else "L"
     if t["pnl"] > 0: w += 1
     else: l += 1
-    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<5} {t['pnl']:>+7.2f} {t['timestamp'][:16]} {t['session']:<8} {t['day']}")
-total_pnl = sum(t["pnl"] for t in trades)
-print(f"\n  {w}W / {l}L ({w/(w+l)*100:.0f}% WR) | PnL: {total_pnl:+.2f} SGD")
+    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<5} {t['entry_price']:>10.4f} "
+          f"{t['pnl']:>+8.2f} {t['timestamp'][:16]} {t['session']:<8} {wl}")
 
-if not trades:
-    print("\n  No trades to import."); sys.exit(0)
+total_pnl = sum(t["pnl"] for t in trades)
+print(f"\n  {w}W / {l}L ({w/(w+l)*100:.0f}% WR) | Total PnL: {total_pnl:+.2f} SGD")
 
 # Confirm
 confirm = input(f"\n  Insert {len(trades)} trades into bot.db? (y/N): ").strip().lower()
 if confirm != "y":
     print("  Aborted."); sys.exit(0)
 
-# ── DB insert ──
+# ── DB insert with dedup ──
 print(f"\n  Inserting into bot.db...")
 conn = sqlite3.connect(str(DB_PATH))
 cursor = conn.cursor()
@@ -181,13 +105,13 @@ existing = [(r[0], r[1], r[2]) for r in cursor.fetchall()]
 
 inserted, skipped = 0, 0
 for t in trades:
-    # Dedup check (within 5 min)
+    # Dedup: same epic + direction within 5 min
     dup = False
     for et, ee, ed in existing:
         if ee == t["epic"] and ed == t["direction"]:
             try:
                 edt = datetime.fromisoformat(str(et).replace("Z", "+00:00"))
-                ndt = datetime.fromisoformat(t["timestamp"])
+                ndt = datetime.fromisoformat(t["timestamp"]).replace(tzinfo=timezone.utc)
                 if abs((edt - ndt).total_seconds()) < 300: dup = True; break
             except: pass
     if dup:
@@ -227,15 +151,15 @@ if inserted > 0:
         from signal_scorer import train_model
         ok, meta = train_model(force=True)
         if ok:
-            print(f"  ML retrained: {meta['n_trades']} trades | CV: {meta['cv_accuracy']:.1%} | WR: {meta['win_rate']:.1%}")
+            print(f"  ML: {meta['n_trades']} trades | CV: {meta['cv_accuracy']:.1%} | WR: {meta['win_rate']:.1%}")
             imp = meta.get("feature_importance", {})
             top = sorted(imp.items(), key=lambda x: -x[1])[:5]
-            print(f"  Top features: {', '.join(f'{k}({v:.0%})' for k,v in top)}")
+            print(f"  Top: {', '.join(f'{k}({v:.0%})' for k,v in top)}")
         else:
-            print(f"  ML: not enough data yet")
+            print(f"  ML: not enough data or training failed")
     except Exception as e:
         print(f"  ML retrain error: {e}")
 
-print(f"\n{\'=\' * 70}")
+print(f"\n{'='*70}")
 print(f"  DONE")
-print(f"{\'=\' * 70}")
+print(f"{'='*70}")
