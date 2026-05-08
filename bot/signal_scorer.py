@@ -18,7 +18,7 @@ _model = _encoders = _model_meta = _last_train_time = None
 _trades_at_train = 0
 ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.35"))
 ML_RETRAIN_HOURS = int(os.getenv("ML_RETRAIN_HOURS", "24"))
-ML_MIN_TRADES = int(os.getenv("ML_MIN_TRADES", "30"))
+ML_MIN_TRADES = int(os.getenv("ML_MIN_TRADES", "25"))
 CATEGORICAL_FEATURES = ["combo", "mss_type", "regime_trend", "regime_vol", "session", "timeframe", "instrument_category"]
 NUMERIC_FEATURES = ["confluence", "rsi", "adx", "atr_ratio", "hour", "day_of_week"]
 
