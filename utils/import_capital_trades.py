@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Import Capital.com trades v3 — uses /confirms/{dealId} for direction+levels."""
+"""Import Capital.com trades v4 — interactive direction input.
+Capital.com API doesn't expose direction in activity/confirms/transactions.
+This script fetches PnL from transactions, then asks user for direction.
+"""
 import os, sys, sqlite3, requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 env_path = Path("/opt/trading-bot/.env")
@@ -22,9 +25,10 @@ if not all([API_KEY, EMAIL, PASSWORD]):
     print("ERROR: Missing credentials"); sys.exit(1)
 
 print("=" * 70)
-print("  IMPORT CAPITAL.COM TRADES -> bot.db (v3)")
+print("  IMPORT CAPITAL.COM TRADES -> bot.db (v4 — interactive)")
 print("=" * 70)
 
+# ── Auth ──
 print("\n  Authenticating...")
 session = requests.Session()
 resp = session.post(f"{API_URL}/api/v1/session", json={
@@ -39,115 +43,133 @@ session.headers.update({
 })
 print("  OK")
 
-# Step 1: Get activities (last 24h) to find dealIds
-print("\n  Fetching activities (last 24h)...")
-resp = session.get(f"{API_URL}/api/v1/history/activity", params={"lastPeriod": 86400})
-if resp.status_code != 200:
-    print(f"  Activities failed: {resp.status_code}"); sys.exit(1)
-activities = resp.json().get("activities", [])
-print(f"  Activities: {len(activities)}")
-
-# Step 2: Get transactions (last 24h) for PnL
-print("\n  Fetching transactions (PnL source)...")
+# ── Fetch transactions (reliable PnL source) ──
+print("\n  Fetching transactions (last 24h)...")
 tx_resp = session.get(f"{API_URL}/api/v1/history/transactions", params={
     "lastPeriod": 86400, "type": "TRADE"
 })
-tx_pnl = {}
-if tx_resp.status_code == 200:
-    for tx in tx_resp.json().get("transactions", []):
-        deal_id = tx.get("dealId", "")
-        pnl_str = str(tx.get("size", "0"))
-        pnl = float(pnl_str.replace("SGD", "").replace(",", "").strip() or "0")
-        tx_pnl[deal_id] = {"pnl": pnl, "date": tx.get("dateUtc", ""), "epic": tx.get("instrumentName", "")}
-print(f"  Transactions with PnL: {len(tx_pnl)}")
+if tx_resp.status_code != 200:
+    print(f"  Transactions failed: {tx_resp.status_code}")
+    # Try without type filter
+    tx_resp = session.get(f"{API_URL}/api/v1/history/transactions", params={"lastPeriod": 86400})
 
-# Step 3: For each POSITION dealId, get confirmation details
-print("\n  Fetching deal confirmations (for direction + levels)...")
-position_deals = [a for a in activities if a.get("type") == "POSITION"]
-print(f"  Position activities: {len(position_deals)}")
+transactions = tx_resp.json().get("transactions", [])
+print(f"  Raw transactions: {len(transactions)}")
 
-trades = []
+# Filter to actual trades (non-zero PnL)
 EPIC_MAP = {
     "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
-    "GOLD": "GOLD", "XAUUSD": "GOLD", "US100": "US100",
-    "USTECH100": "US100", "US500": "US500", "SPX500": "US500",
-    "OIL_CRUDE": "OIL_CRUDE", "OILCRUDE": "OIL_CRUDE",
-    "BTCUSD": "BTCUSD", "ETHUSD": "ETHUSD",
+    "Gold": "GOLD", "GOLD": "GOLD", "US Tech 100": "US100",
+    "US 500": "US500", "US500": "US500", "Oil - Crude": "OIL_CRUDE",
+    "OIL_CRUDE": "OIL_CRUDE", "Bitcoin": "BTCUSD", "BTCUSD": "BTCUSD",
+    "Ethereum": "ETHUSD", "ETHUSD": "ETHUSD",
 }
 def norm_epic(raw):
-    raw = raw.upper().replace(" ", "").replace("/", "").replace("_", "")
+    if raw in EPIC_MAP:
+        return EPIC_MAP[raw]
     for k, v in EPIC_MAP.items():
-        if k.replace("_", "") in raw:
+        if k.lower() in raw.lower():
             return v
-    return raw
+    return raw.upper().replace(" ", "")
 
-for act in position_deals:
-    deal_id = act.get("dealId", "")
-    epic_raw = act.get("epic", "")
-    date_str = act.get("dateUTC", act.get("date", ""))
+trades_raw = []
+for tx in transactions:
+    pnl_str = str(tx.get("size", "0"))
+    pnl = float(pnl_str.replace("SGD", "").replace(",", "").strip() or "0")
+    if pnl == 0:
+        continue  # Skip zero-PnL (fees, adjustments)
+    epic_raw = tx.get("instrumentName", "")
+    date_str = tx.get("dateUtc", tx.get("date", ""))
+    trades_raw.append({
+        "epic_raw": epic_raw,
+        "epic": norm_epic(epic_raw),
+        "pnl": pnl,
+        "date": date_str,
+        "dealId": tx.get("dealId", ""),
+    })
+
+if not trades_raw:
+    print("\n  No trades with PnL found in last 24h.")
+    print("  Try running during market hours or after recent trades close.")
+    sys.exit(0)
+
+# ── Display and ask for directions ──
+print(f"\n  Found {len(trades_raw)} trades with PnL:")
+print(f"  {'#':>3} {'Epic':<12} {'PnL':>8} {'Date':<20}")
+print(f"  {'-'*3} {'-'*12} {'-'*8} {'-'*20}")
+for i, t in enumerate(trades_raw, 1):
+    print(f"  {i:>3} {t['epic']:<12} {t['pnl']:>+7.2f} {t['date'][:19]}")
+
+print(f"\n  Enter direction for each trade (B=BUY, S=SELL, X=skip):")
+print(f"  You can also type all at once, e.g. 'SBSBSX' for 6 trades.")
+print()
+
+# Get input
+user_input = input("  Directions: ").strip().upper()
+if len(user_input) == len(trades_raw):
+    # Single string like "BSSBBX"
+    directions = list(user_input)
+else:
+    # Space-separated or comma-separated
+    directions = [d.strip() for d in user_input.replace(",", " ").split()]
+
+if len(directions) != len(trades_raw):
+    print(f"\n  ERROR: Expected {len(trades_raw)} directions, got {len(directions)}")
+    print(f"  Please enter exactly {len(trades_raw)} characters (B/S/X)")
+    sys.exit(1)
+
+# ── Build valid trades ──
+trades = []
+for t, d in zip(trades_raw, directions):
+    if d == "X":
+        continue
+    direction = "BUY" if d == "B" else "SELL" if d == "S" else None
+    if not direction:
+        print(f"  WARNING: Unknown direction '{d}' for {t['epic']}, skipping")
+        continue
     
-    # Try /confirms/{dealId}
-    confirm_resp = session.get(f"{API_URL}/api/v1/confirms/{deal_id}")
-    direction = ""
-    open_level = 0
-    close_level = 0
-    
-    if confirm_resp.status_code == 200:
-        confirm = confirm_resp.json()
-        direction = confirm.get("direction", "").upper()
-        open_level = float(confirm.get("level", confirm.get("openLevel", 0)) or 0)
-        close_level = float(confirm.get("closeLevel", 0) or 0)
-        # If this is a close confirmation, profit may be here
-        profit = float(confirm.get("profit", 0) or 0)
-        if not epic_raw:
-            epic_raw = confirm.get("epic", "")
-        print(f"    {deal_id[:20]}... → {direction} {epic_raw} level={open_level} profit={profit}")
-    else:
-        print(f"    {deal_id[:20]}... → confirms {confirm_resp.status_code}")
-    
-    # Get PnL from transactions
-    pnl = tx_pnl.get(deal_id, {}).get("pnl", 0)
-    
-    # Parse timestamp
     ts = datetime.now(timezone.utc)
-    if date_str:
-        try: ts = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    if t["date"]:
+        try: ts = datetime.fromisoformat(t["date"].replace("Z", "+00:00"))
         except:
-            try: ts = datetime.strptime(date_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            try: ts = datetime.strptime(t["date"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
             except: pass
     
-    epic = norm_epic(epic_raw)
     hour = ts.hour
     sess = "asian" if hour < 7 else "london" if hour < 12 else "new_york" if hour < 21 else "late"
+    day = ts.strftime("%A")
     
-    if direction and (pnl != 0 or close_level != 0):
-        trades.append({
-            "epic": epic, "direction": direction,
-            "entry_price": open_level, "close_price": close_level,
-            "pnl": pnl, "timestamp": ts.isoformat(), "session": sess,
-            "zone_types": "bearish+mss+sell" if direction == "SELL" else "bullish+mss+buy",
-            "mss_type": "bearish_mss" if direction == "SELL" else "bullish_mss",
-            "timeframe": "H1", "confluence": 7,
-        })
+    trades.append({
+        "epic": t["epic"], "direction": direction,
+        "entry_price": 0,  # Not available from API
+        "pnl": t["pnl"], "timestamp": ts.isoformat(),
+        "session": sess, "day": day,
+        "zone_types": f"{'bearish' if direction == 'SELL' else 'bullish'}+mss+{direction.lower()}",
+        "mss_type": f"{'bearish' if direction == 'SELL' else 'bullish'}_mss",
+        "timeframe": "H1", "confluence": 7,
+    })
 
-# Display
-print(f"\n  Parsed {len(trades)} valid trades:")
-print(f"  {'#':>3} {'Epic':<12} {'Dir':<5} {'Entry':>10} {'PnL':>8} {'Date':<16} {'Sess'}")
-print(f"  {'-'*3} {'-'*12} {'-'*5} {'-'*10} {'-'*8} {'-'*16} {'-'*7}")
+# ── Summary ──
+print(f"\n  Valid trades to import: {len(trades)}")
+print(f"  {'#':>3} {'Epic':<12} {'Dir':<5} {'PnL':>8} {'Date':<16} {'Session':<8} {'Day'}")
+print(f"  {'-'*3} {'-'*12} {'-'*5} {'-'*8} {'-'*16} {'-'*8} {'-'*9}")
 w, l = 0, 0
 for i, t in enumerate(trades, 1):
     if t["pnl"] > 0: w += 1
-    elif t["pnl"] < 0: l += 1
-    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<5} {t['entry_price']:>10.4f} {t['pnl']:>+7.2f} {t['timestamp'][:16]} {t['session']}")
-if w + l > 0:
-    print(f"\n  {w}W / {l}L ({w/(w+l)*100:.0f}% WR) | PnL: {sum(t['pnl'] for t in trades):+.2f} SGD")
+    else: l += 1
+    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<5} {t['pnl']:>+7.2f} {t['timestamp'][:16]} {t['session']:<8} {t['day']}")
+total_pnl = sum(t["pnl"] for t in trades)
+print(f"\n  {w}W / {l}L ({w/(w+l)*100:.0f}% WR) | PnL: {total_pnl:+.2f} SGD")
 
 if not trades:
-    print("\n  No trades with direction found.")
-    print("  Try running with wider lastPeriod or check /api/v1/confirms endpoint.")
-    sys.exit(0)
+    print("\n  No trades to import."); sys.exit(0)
 
-# DB insert
+# Confirm
+confirm = input(f"\n  Insert {len(trades)} trades into bot.db? (y/N): ").strip().lower()
+if confirm != "y":
+    print("  Aborted."); sys.exit(0)
+
+# ── DB insert ──
 print(f"\n  Inserting into bot.db...")
 conn = sqlite3.connect(str(DB_PATH))
 cursor = conn.cursor()
@@ -159,6 +181,7 @@ existing = [(r[0], r[1], r[2]) for r in cursor.fetchall()]
 
 inserted, skipped = 0, 0
 for t in trades:
+    # Dedup check (within 5 min)
     dup = False
     for et, ee, ed in existing:
         if ee == t["epic"] and ed == t["direction"]:
@@ -169,10 +192,15 @@ for t in trades:
             except: pass
     if dup:
         skipped += 1; continue
-    data = {"epic": t["epic"], "direction": t["direction"], "entry_price": t["entry_price"],
-            "timestamp": t["timestamp"], "status": "closed", "pnl": t["pnl"],
-            "timeframe": t["timeframe"], "zone_types": t["zone_types"],
-            "mss_type": t["mss_type"], "confluence": t["confluence"], "session": t["session"]}
+    
+    data = {
+        "epic": t["epic"], "direction": t["direction"],
+        "entry_price": t["entry_price"],
+        "timestamp": t["timestamp"], "status": "closed",
+        "pnl": t["pnl"], "timeframe": t["timeframe"],
+        "zone_types": t["zone_types"], "mss_type": t["mss_type"],
+        "confluence": t["confluence"], "session": t["session"],
+    }
     valid = {k: v for k, v in data.items() if k in columns}
     try:
         cols = ", ".join(valid.keys())
@@ -187,10 +215,11 @@ cursor.execute("SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl IS NOT
 total = cursor.fetchone()[0]
 cursor.execute("SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl > 0")
 total_wins = cursor.fetchone()[0]
-print(f"  Inserted: {inserted} | Skipped: {skipped}")
-print(f"  TOTALS: {total} trades | {total_wins} wins | WR: {total_wins/total*100:.1f}%")
+print(f"  Inserted: {inserted} | Skipped (dup): {skipped}")
+print(f"  DB TOTALS: {total} trades | {total_wins} wins | WR: {total_wins/total*100:.1f}%")
 conn.close()
 
+# ── ML retrain ──
 if inserted > 0:
     print(f"\n  Forcing ML retrain...")
     sys.path.insert(0, "/opt/trading-bot/bot")
@@ -198,11 +227,15 @@ if inserted > 0:
         from signal_scorer import train_model
         ok, meta = train_model(force=True)
         if ok:
-            print(f"  ML: {meta['n_trades']} trades | CV: {meta['cv_accuracy']:.1%} | WR: {meta['win_rate']:.1%}")
+            print(f"  ML retrained: {meta['n_trades']} trades | CV: {meta['cv_accuracy']:.1%} | WR: {meta['win_rate']:.1%}")
             imp = meta.get("feature_importance", {})
             top = sorted(imp.items(), key=lambda x: -x[1])[:5]
-            print(f"  Top: {', '.join(f'{k}({v:.0%})' for k,v in top)}")
+            print(f"  Top features: {', '.join(f'{k}({v:.0%})' for k,v in top)}")
+        else:
+            print(f"  ML: not enough data yet")
     except Exception as e:
-        print(f"  ML error: {e}")
+        print(f"  ML retrain error: {e}")
 
-print(f"\n{'='*70}\n  DONE\n{'='*70}")
+print(f"\n{\'=\' * 70}")
+print(f"  DONE")
+print(f"{\'=\' * 70}")
