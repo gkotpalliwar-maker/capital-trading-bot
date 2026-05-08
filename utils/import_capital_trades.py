@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import Capital.com trades into bot.db — v2 (fixed for transaction format)."""
+"""Import Capital.com trades v3 — uses /confirms/{dealId} for direction+levels."""
 import os, sys, sqlite3, requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -22,7 +22,7 @@ if not all([API_KEY, EMAIL, PASSWORD]):
     print("ERROR: Missing credentials"); sys.exit(1)
 
 print("=" * 70)
-print("  IMPORT CAPITAL.COM TRADES -> bot.db (v2)")
+print("  IMPORT CAPITAL.COM TRADES -> bot.db (v3)")
 print("=" * 70)
 
 print("\n  Authenticating...")
@@ -39,56 +39,34 @@ session.headers.update({
 })
 print("  OK")
 
-# ── Use ACTIVITY endpoint (has direction + levels) ──
-print("\n  Fetching activity history (last 10 days)...")
-dt_from = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S")
-dt_to = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+# Step 1: Get activities (last 24h) to find dealIds
+print("\n  Fetching activities (last 24h)...")
+resp = session.get(f"{API_URL}/api/v1/history/activity", params={"lastPeriod": 86400})
+if resp.status_code != 200:
+    print(f"  Activities failed: {resp.status_code}"); sys.exit(1)
+activities = resp.json().get("activities", [])
+print(f"  Activities: {len(activities)}")
 
-resp = session.get(f"{API_URL}/api/v1/history/activity", params={
-    "from": dt_from, "to": dt_to
-})
-
-activities = []
-if resp.status_code == 200:
-    data = resp.json()
-    activities = data.get("activities", [])
-    print(f"  Activities endpoint: {len(activities)} items")
-    if activities:
-        print(f"  Sample keys: {list(activities[0].keys())}")
-        print(f"  Sample: {activities[0]}")
-else:
-    print(f"  Activities failed: {resp.status_code}")
-    # Try lastPeriod with smaller value
-    for period in [604800, 259200, 86400]:
-        resp2 = session.get(f"{API_URL}/api/v1/history/activity", params={
-            "lastPeriod": period
-        })
-        if resp2.status_code == 200:
-            activities = resp2.json().get("activities", [])
-            print(f"  lastPeriod={period}: {len(activities)} items")
-            if activities:
-                print(f"  Sample: {activities[0]}")
-            break
-        else:
-            print(f"  lastPeriod={period}: {resp2.status_code}")
-
-# Also fetch transactions for PnL mapping
-print("\n  Fetching transactions (for PnL)...")
+# Step 2: Get transactions (last 24h) for PnL
+print("\n  Fetching transactions (PnL source)...")
 tx_resp = session.get(f"{API_URL}/api/v1/history/transactions", params={
-    "from": dt_from, "to": dt_to, "type": "TRADE"
+    "lastPeriod": 86400, "type": "TRADE"
 })
-transactions = {}
+tx_pnl = {}
 if tx_resp.status_code == 200:
     for tx in tx_resp.json().get("transactions", []):
         deal_id = tx.get("dealId", "")
         pnl_str = str(tx.get("size", "0"))
         pnl = float(pnl_str.replace("SGD", "").replace(",", "").strip() or "0")
-        transactions[deal_id] = {"pnl": pnl, "date": tx.get("dateUtc", "")}
-    print(f"  Transactions: {len(transactions)} (PnL lookup)")
-else:
-    print(f"  Transactions: {tx_resp.status_code}")
+        tx_pnl[deal_id] = {"pnl": pnl, "date": tx.get("dateUtc", ""), "epic": tx.get("instrumentName", "")}
+print(f"  Transactions with PnL: {len(tx_pnl)}")
 
-# ── Parse activities into trades ──
+# Step 3: For each POSITION dealId, get confirmation details
+print("\n  Fetching deal confirmations (for direction + levels)...")
+position_deals = [a for a in activities if a.get("type") == "POSITION"]
+print(f"  Position activities: {len(position_deals)}")
+
+trades = []
 EPIC_MAP = {
     "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
     "GOLD": "GOLD", "XAUUSD": "GOLD", "US100": "US100",
@@ -96,7 +74,6 @@ EPIC_MAP = {
     "OIL_CRUDE": "OIL_CRUDE", "OILCRUDE": "OIL_CRUDE",
     "BTCUSD": "BTCUSD", "ETHUSD": "ETHUSD",
 }
-
 def norm_epic(raw):
     raw = raw.upper().replace(" ", "").replace("/", "").replace("_", "")
     for k, v in EPIC_MAP.items():
@@ -104,37 +81,34 @@ def norm_epic(raw):
             return v
     return raw
 
-trades = []
-seen_deals = set()
-
-for act in activities:
-    # Look for position close activities
-    act_type = act.get("type", "").upper()
-    status = act.get("status", "").upper()
+for act in position_deals:
+    deal_id = act.get("dealId", "")
+    epic_raw = act.get("epic", "")
+    date_str = act.get("dateUTC", act.get("date", ""))
     
-    # Different activity formats Capital.com might return
-    deal_id = act.get("dealId", act.get("dealReference", ""))
-    epic_raw = act.get("epic", act.get("instrumentName", act.get("market", "")))
-    direction = act.get("direction", act.get("dealDirection", "")).upper()
+    # Try /confirms/{dealId}
+    confirm_resp = session.get(f"{API_URL}/api/v1/confirms/{deal_id}")
+    direction = ""
+    open_level = 0
+    close_level = 0
     
-    # Get details from nested objects if present
-    details = act.get("details", {}) or {}
-    if not direction:
-        direction = details.get("direction", "").upper()
-    if not epic_raw:
-        epic_raw = details.get("epic", details.get("instrumentName", ""))
+    if confirm_resp.status_code == 200:
+        confirm = confirm_resp.json()
+        direction = confirm.get("direction", "").upper()
+        open_level = float(confirm.get("level", confirm.get("openLevel", 0)) or 0)
+        close_level = float(confirm.get("closeLevel", 0) or 0)
+        # If this is a close confirmation, profit may be here
+        profit = float(confirm.get("profit", 0) or 0)
+        if not epic_raw:
+            epic_raw = confirm.get("epic", "")
+        print(f"    {deal_id[:20]}... → {direction} {epic_raw} level={open_level} profit={profit}")
+    else:
+        print(f"    {deal_id[:20]}... → confirms {confirm_resp.status_code}")
     
-    open_level = float(act.get("openLevel", details.get("openLevel", 0)) or 0)
-    close_level = float(act.get("closeLevel", details.get("closeLevel", act.get("level", 0))) or 0)
-    size = float(act.get("size", details.get("size", 0)) or 0)
+    # Get PnL from transactions
+    pnl = tx_pnl.get(deal_id, {}).get("pnl", 0)
     
-    # Get PnL from transaction lookup
-    pnl = float(act.get("profit", act.get("profitAndLoss", 0)) or 0)
-    if pnl == 0 and deal_id in transactions:
-        pnl = transactions[deal_id]["pnl"]
-    
-    # Parse date
-    date_str = act.get("date", act.get("dateUtc", ""))
+    # Parse timestamp
     ts = datetime.now(timezone.utc)
     if date_str:
         try: ts = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
@@ -142,60 +116,35 @@ for act in activities:
             try: ts = datetime.strptime(date_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
             except: pass
     
-    # Skip if no useful data
-    if not epic_raw:
-        continue
-    if deal_id in seen_deals:
-        continue
-    seen_deals.add(deal_id)
-    
     epic = norm_epic(epic_raw)
     hour = ts.hour
     sess = "asian" if hour < 7 else "london" if hour < 12 else "new_york" if hour < 21 else "late"
     
-    # If no direction from activity, try to infer from PnL + note
-    if not direction:
-        note = str(act.get("note", act.get("description", ""))).lower()
-        if "buy" in note:
-            direction = "BUY"
-        elif "sell" in note:
-            direction = "SELL"
-    
-    trades.append({
-        "epic": epic, "direction": direction or "UNKNOWN",
-        "entry_price": open_level, "close_price": close_level,
-        "pnl": pnl, "timestamp": ts.isoformat(), "session": sess,
-        "zone_types": ("bearish+mss+sell" if direction == "SELL" else "bullish+mss+buy") if direction else "",
-        "mss_type": ("bearish_mss" if direction == "SELL" else "bullish_mss") if direction else "",
-        "timeframe": "H1", "confluence": 7,
-        "deal_id": deal_id, "act_type": act_type, "status": status,
-        "raw_keys": list(act.keys()),
-    })
+    if direction and (pnl != 0 or close_level != 0):
+        trades.append({
+            "epic": epic, "direction": direction,
+            "entry_price": open_level, "close_price": close_level,
+            "pnl": pnl, "timestamp": ts.isoformat(), "session": sess,
+            "zone_types": "bearish+mss+sell" if direction == "SELL" else "bullish+mss+buy",
+            "mss_type": "bearish_mss" if direction == "SELL" else "bullish_mss",
+            "timeframe": "H1", "confluence": 7,
+        })
 
-# Display ALL parsed data
-print(f"\n  Parsed {len(trades)} items from activities:")
-print(f"  {'#':>3} {'Epic':<12} {'Dir':<7} {'Entry':>10} {'Close':>10} {'PnL':>8} {'Date':<16} {'Type'}")
-print(f"  {'-'*3} {'-'*12} {'-'*7} {'-'*10} {'-'*10} {'-'*8} {'-'*16} {'-'*10}")
+# Display
+print(f"\n  Parsed {len(trades)} valid trades:")
+print(f"  {'#':>3} {'Epic':<12} {'Dir':<5} {'Entry':>10} {'PnL':>8} {'Date':<16} {'Sess'}")
+print(f"  {'-'*3} {'-'*12} {'-'*5} {'-'*10} {'-'*8} {'-'*16} {'-'*7}")
 w, l = 0, 0
 for i, t in enumerate(trades, 1):
     if t["pnl"] > 0: w += 1
     elif t["pnl"] < 0: l += 1
-    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<7} {t['entry_price']:>10.4f} "
-          f"{t['close_price']:>10.4f} {t['pnl']:>+7.2f} {t['timestamp'][:16]} {t['act_type']}")
-
+    print(f"  {i:>3} {t['epic']:<12} {t['direction']:<5} {t['entry_price']:>10.4f} {t['pnl']:>+7.2f} {t['timestamp'][:16]} {t['session']}")
 if w + l > 0:
     print(f"\n  {w}W / {l}L ({w/(w+l)*100:.0f}% WR) | PnL: {sum(t['pnl'] for t in trades):+.2f} SGD")
 
-# Filter to only trades with direction and PnL
-valid_trades = [t for t in trades if t["direction"] in ("BUY", "SELL") and t["pnl"] != 0]
-print(f"\n  Valid for ML (have direction + PnL): {len(valid_trades)}")
-
-if not valid_trades:
-    print("\n  ⚠️  No valid trades found.")
-    print("  The activity endpoint may not return direction for your account type.")
-    print("  Showing raw activity structure for debugging:")
-    for act in activities[:3]:
-        print(f"    {act}")
+if not trades:
+    print("\n  No trades with direction found.")
+    print("  Try running with wider lastPeriod or check /api/v1/confirms endpoint.")
     sys.exit(0)
 
 # DB insert
@@ -209,7 +158,7 @@ cursor.execute("SELECT timestamp, epic, direction FROM trades WHERE status='clos
 existing = [(r[0], r[1], r[2]) for r in cursor.fetchall()]
 
 inserted, skipped = 0, 0
-for t in valid_trades:
+for t in trades:
     dup = False
     for et, ee, ed in existing:
         if ee == t["epic"] and ed == t["direction"]:
