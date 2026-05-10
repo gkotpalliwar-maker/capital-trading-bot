@@ -4,6 +4,10 @@
 This is a signal backtest, not a broker execution simulator. It replays rolling
 windows of Capital.com candles and records what the bot would have classified as
 BLOCK/WATCH/ALERT/EXECUTABLE at each step.
+
+For ALERT/EXECUTABLE rows it can also simulate a simple TP/SL outcome over the
+next N candles. This ignores spread/slippage and uses a conservative rule: if SL
+and TP are both touched in the same candle, SL is counted first.
 """
 from __future__ import annotations
 
@@ -88,6 +92,59 @@ def _signal_to_dict(sig, instrument: str, epic: str, timeframe: str, df, regime:
     }
 
 
+def _simulate_outcome(raw, signal: dict, signal_end: int, max_bars: int) -> dict:
+    """Return a simple forward TP/SL outcome from candles after the signal."""
+    entry = float(signal.get("entry") or 0)
+    sl = float(signal.get("sl") or 0)
+    tp = float(signal.get("tp") or 0)
+    direction = signal.get("direction", "")
+    if not entry or not sl or not tp or signal_end >= len(raw):
+        return {"outcome": "NO_DATA", "outcome_bars": 0, "outcome_r": 0.0, "outcome_time": ""}
+
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return {"outcome": "INVALID_RISK", "outcome_bars": 0, "outcome_r": 0.0, "outcome_time": ""}
+
+    future = raw.iloc[signal_end:min(len(raw), signal_end + max_bars)]
+    for offset, (ts, row) in enumerate(future.iterrows(), start=1):
+        high = float(row["high"])
+        low = float(row["low"])
+        if direction == "BUY":
+            hit_sl = low <= sl
+            hit_tp = high >= tp
+        else:
+            hit_sl = high >= sl
+            hit_tp = low <= tp
+
+        if hit_sl:
+            return {
+                "outcome": "SL",
+                "outcome_bars": offset,
+                "outcome_r": -1.0,
+                "outcome_time": str(ts),
+            }
+        if hit_tp:
+            rr = abs(tp - entry) / risk
+            return {
+                "outcome": "TP",
+                "outcome_bars": offset,
+                "outcome_r": round(rr, 2),
+                "outcome_time": str(ts),
+            }
+
+    if future.empty:
+        return {"outcome": "NO_DATA", "outcome_bars": 0, "outcome_r": 0.0, "outcome_time": ""}
+
+    last_close = float(future["close"].iloc[-1])
+    open_r = (last_close - entry) / risk if direction == "BUY" else (entry - last_close) / risk
+    return {
+        "outcome": "OPEN",
+        "outcome_bars": len(future),
+        "outcome_r": round(open_r, 2),
+        "outcome_time": str(future.index[-1]),
+    }
+
+
 def run_backtest(args) -> list[dict]:
     client = _client()
     strategy = SMCICTStrategy()
@@ -135,7 +192,11 @@ def run_backtest(args) -> list[dict]:
                         mtf_func=None,
                     )
                     memory = decision["modifiers"].get("market_memory") or {}
-                    rows.append({
+                    outcome = {"outcome": "", "outcome_bars": "", "outcome_r": "", "outcome_time": ""}
+                    if args.simulate_outcomes and decision["status"] in ("ALERT", "EXECUTABLE"):
+                        outcome = _simulate_outcome(raw, sig_data, end, args.outcome_bars)
+
+                    row = {
                         "time": str(df.index[-1]),
                         "instrument": instrument,
                         "epic": epic,
@@ -144,15 +205,23 @@ def run_backtest(args) -> list[dict]:
                         "status": decision["status"],
                         "score": decision["score"],
                         "quality": decision["quality"],
+                        "entry": round(float(sig_data.get("entry") or 0), 5),
+                        "sl": round(float(sig_data.get("sl") or 0), 5),
+                        "tp": round(float(sig_data.get("tp") or 0), 5),
                         "zone_types": sig_data["zone_types"],
                         "mss_type": sig_data["mss_type"],
                         "rr": round(float(sig_data.get("rr") or 0), 2),
                         "regime": sig_data["regime"],
                         "memory_bias": memory.get("bias", "neutral"),
                         "memory_adj": memory.get("score_adj", 0),
+                        "outcome": outcome["outcome"],
+                        "outcome_bars": outcome["outcome_bars"],
+                        "outcome_r": outcome["outcome_r"],
+                        "outcome_time": outcome["outcome_time"],
                         "blocks": " | ".join(decision["blocks"][:3]),
                         "warnings": " | ".join(decision["warnings"][:3]),
-                    })
+                    }
+                    rows.append(row)
     return rows
 
 
@@ -168,11 +237,27 @@ def print_summary(rows: list[dict]) -> None:
 
     actionable = [r for r in rows if r["status"] in ("ALERT", "EXECUTABLE")]
     print(f"\nActionable alerts/executables: {len(actionable)}")
+    if actionable and "outcome" in actionable[0] and actionable[0]["outcome"]:
+        by_outcome = Counter(r["outcome"] for r in actionable)
+        closed = [r for r in actionable if r["outcome"] in ("TP", "SL")]
+        total_r = sum(float(r["outcome_r"]) for r in actionable if r["outcome"] not in ("", "NO_DATA"))
+        print("Actionable outcomes:", dict(by_outcome))
+        if closed:
+            wins = sum(1 for r in closed if r["outcome"] == "TP")
+            print(f"Closed win rate: {wins}/{len(closed)} = {wins/len(closed):.1%}")
+        print(f"Total simulated R including OPEN marks: {total_r:.2f}R")
+
+        print("\nBy status/outcome:")
+        status_outcome = Counter((r["status"], r["outcome"]) for r in actionable)
+        for (status, outcome), count in status_outcome.most_common():
+            print(f"  {status:<10} {outcome:<8} {count}")
+
     for r in actionable[-30:]:
         print(
             f"  {r['time']} {r['epic']} {r['timeframe']} {r['direction']} "
             f"{r['status']} score={r['score']} rr={r['rr']} "
-            f"zones={r['zone_types']} memory={r['memory_bias']}({r['memory_adj']:+})"
+            f"zones={r['zone_types']} memory={r['memory_bias']}({r['memory_adj']:+}) "
+            f"outcome={r.get('outcome', '')} {r.get('outcome_r', '')}R"
         )
 
 
@@ -186,6 +271,10 @@ def main() -> int:
     parser.add_argument("--include-retrace", action="store_true", help="Include retrace-entry candidates")
     parser.add_argument("--use-ml", action="store_true", help="Include current ML scorer")
     parser.add_argument("--technical-only", action="store_true", default=True, help="Skip live news/MTF/dedup context")
+    parser.add_argument("--simulate-outcomes", action=argparse.BooleanOptionalAction, default=True,
+                        help="Simulate TP/SL outcomes for ALERT/EXECUTABLE rows")
+    parser.add_argument("--outcome-bars", type=int, default=48,
+                        help="Number of future candles to inspect for TP/SL")
     parser.add_argument("--csv", default="data/backtest_signals.csv", help="CSV output path")
     args = parser.parse_args()
 
