@@ -1,6 +1,11 @@
 # Release Notes - v2.12.0 Market Memory
 
-Commit: `6fca4fd` introduced the market-memory layer.
+Commits:
+
+- `6fca4fd` introduced the market-memory layer.
+- `e42f439` added the signal backtest utility.
+- `f955f52` added simple TP/SL outcome simulation.
+- `17cb068` sped up backtest replay with fast guardrails and progress output.
 
 ## Summary
 
@@ -150,6 +155,60 @@ BOT_VERSION = "2.12.0"
 __codename__ = "market-memory"
 ```
 
+### Added `utils/backtest_signals.py`
+
+New utility to replay recent Capital.com candles through the current strategy and decision stack.
+
+It can:
+
+- Fetch recent candles using the configured Capital.com credentials.
+- Replay rolling historical windows.
+- Generate SMC/ICT candidates.
+- Optionally include retrace-entry candidates.
+- Run the signal decision engine and market memory layer.
+- Write signal classifications to CSV.
+- Simulate simple TP/SL outcomes for `ALERT` and `EXECUTABLE` rows.
+
+This is a signal replay tool, not a full broker simulator. It does not model spread, slippage, partial closes, trade management, or live news/MTF context unless separately wired in. Outcome simulation is conservative: if TP and SL are both touched in the same candle, SL is counted first.
+
+Example fast H1 run:
+
+```bash
+python utils/backtest_signals.py \
+  --instruments gold ethusd crude \
+  --timeframes H1 \
+  --candles 800 \
+  --step 5 \
+  --include-retrace \
+  --outcome-bars 48 \
+  --csv data/backtest_fast_h1.csv
+```
+
+Example expanded run:
+
+```bash
+python utils/backtest_signals.py \
+  --instruments gold ethusd crude \
+  --timeframes M15 H1 H4 \
+  --candles 800 \
+  --step 5 \
+  --include-retrace \
+  --outcome-bars 48 \
+  --csv data/backtest_fast_m15_h1_h4.csv
+```
+
+Useful options:
+
+```bash
+--step 5              # Replay every 5 candles instead of every candle
+--max-steps 30        # Limit replay work per instrument/timeframe
+--progress-every 25   # Print progress while running
+--full-guardrails     # Use slower external guardrails
+--no-simulate-outcomes
+```
+
+Default backtest mode now uses fast price-action guardrails. This avoids slow candle-by-candle calls to external-style intelligence checks such as COT, TradingView, and fear/greed.
+
 ## Validation Performed
 
 Commands run locally:
@@ -160,6 +219,14 @@ git diff --cached --check
 ```
 
 Also ran a synthetic smoke test through `signal_decision.evaluate_signal_candidate()` to confirm market memory is attached to the decision modifiers and Telegram text.
+
+Backtest utility validation:
+
+```bash
+python -m compileall -q utils/backtest_signals.py
+```
+
+VPS backtest runs observed that edge is concentrated by instrument/timeframe/setup rather than universal. In sample runs, H1 performed better than the combined M15/H1/H4 basket, and broad executable promotion was not justified yet.
 
 ## Deployment Notes
 
@@ -204,6 +271,9 @@ Watch for:
 - Too many over-touched-zone penalties on naturally ranging pairs.
 - Memory adding confidence to retrace signals too often.
 - Non-top5 setups appearing as alerts. They should not become executable unless explicitly allowed.
+- Backtest results varying strongly by instrument/timeframe/setup.
+- H4 and M15 alerts dragging down combined results if treated too broadly.
+- Same-candle BUY/SELL conflicts, which should be handled by a future conflict arbitration layer.
 
 ## Next Possible Improvements
 
@@ -212,3 +282,6 @@ Watch for:
 - Add `/memory` Telegram command to inspect current memory bias per instrument.
 - Add config/env toggles for memory weights.
 - Add unit tests for demand takeover, supply takeover, failed breakout, failed breakdown, and chop detection.
+- Add adaptive `market_policy.py` based on rolling backtest outcomes.
+- Store nightly backtest rows in SQLite and generate policy recommendations.
+- Add conflict arbitration before allowing executable signals.
