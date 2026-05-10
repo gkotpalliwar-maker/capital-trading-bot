@@ -1,0 +1,241 @@
+Prompt To Implement This
+
+You are modifying the Capital.com trading bot.
+
+Goal:
+Create an adaptive market policy system that uses stored market memory and rolling backtest outcomes to decide which signal groups are allowed to become EXECUTABLE, ALERT-only, WATCH-only, or BLOCKED.
+
+Do not add new trading strategies. This is a policy and analytics layer above the existing signal decision engine.
+
+Current context:
+- `bot/pattern_memory.py` evaluates recent market context.
+- `bot/signal_decision.py` produces signal decisions: BLOCK, WATCH, ALERT, EXECUTABLE.
+- `utils/backtest_signals.py` can replay recent candles and simulate TP/SL outcomes.
+- Backtest results show performance varies strongly by instrument/timeframe/direction/setup.
+- Static policy is not ideal. We want a rolling adaptive policy based on stored evidence.
+
+Implement the following.
+
+1. Add database tables in `bot/persistence.py`
+
+Create table:
+
+```sql
+CREATE TABLE IF NOT EXISTS trade_backtest (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    signal_time TEXT NOT NULL,
+    instrument TEXT NOT NULL,
+    epic TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    status TEXT NOT NULL,
+    score INTEGER,
+    quality TEXT,
+    setup_family TEXT,
+    zone_types TEXT,
+    mss_type TEXT,
+    regime TEXT,
+    memory_bias TEXT,
+    memory_adj INTEGER,
+    entry REAL,
+    sl REAL,
+    tp REAL,
+    rr REAL,
+    outcome TEXT,
+    outcome_bars INTEGER,
+    outcome_r REAL,
+    outcome_time TEXT,
+    warnings TEXT,
+    blocks TEXT
+);
+Create table:
+
+CREATE TABLE IF NOT EXISTS market_policy_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    updated_at TEXT NOT NULL,
+    policy_key TEXT NOT NULL UNIQUE,
+    epic TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    setup_family TEXT NOT NULL,
+    regime TEXT,
+    memory_bias TEXT,
+    sample_size INTEGER NOT NULL,
+    wins INTEGER NOT NULL,
+    losses INTEGER NOT NULL,
+    open_count INTEGER NOT NULL,
+    win_rate REAL NOT NULL,
+    total_r REAL NOT NULL,
+    avg_r REAL NOT NULL,
+    profit_factor REAL NOT NULL,
+    max_consecutive_losses INTEGER NOT NULL,
+    recent_total_r REAL NOT NULL,
+    recommendation TEXT NOT NULL,
+    reason TEXT NOT NULL
+);
+Recommendations must be one of:
+
+ALLOW_EXECUTABLE
+ALERT_ONLY
+WATCH_ONLY
+BLOCK
+INSUFFICIENT_DATA
+Add bot/market_policy.py
+Expose:
+
+def classify_setup(signal: dict) -> str:
+    ...
+This should normalize raw zone_types into broader families:
+
+retrace+buy -> retrace_buy
+retrace+sell -> retrace_sell
+bearish+mss+sell / bearish+mss / mss+sell -> bearish_mss_sell
+bos+bullish+buy / bos+buy / bos+bullish -> bullish_bos_buy
+bearish+bos+sell / bos+sell / bearish+bos -> bearish_bos_sell
+bullish+buy+mss / buy+mss / bullish+mss -> bullish_mss_buy
+other -> other
+Expose:
+
+def get_policy_decision(signal: dict, decision: dict) -> dict:
+Return:
+
+{
+    "recommendation": "ALLOW_EXECUTABLE" | "ALERT_ONLY" | "WATCH_ONLY" | "BLOCK" | "INSUFFICIENT_DATA",
+    "policy_key": str,
+    "reason": str,
+    "stats": dict
+}
+The lookup key should include:
+
+epic
+timeframe
+direction
+setup_family
+Optionally include regime and memory bias if enough data exists. If exact key has insufficient data, fall back to broader keys:
+
+epic + timeframe + direction + setup_family
+epic + timeframe + direction
+epic + timeframe
+timeframe + setup_family
+Policy behavior:
+
+BLOCK should hard block.
+WATCH_ONLY caps status at WATCH.
+ALERT_ONLY caps status at ALERT.
+ALLOW_EXECUTABLE does not force executable; it only allows the existing decision engine to keep EXECUTABLE if it already earned it.
+INSUFFICIENT_DATA caps at ALERT by default.
+Integrate policy into bot/signal_decision.py
+After score is calculated but before final status is returned:
+
+policy = market_policy.get_policy_decision(signal, current_decision_context)
+Then apply status caps:
+
+BLOCK -> status BLOCK
+WATCH_ONLY -> max WATCH
+ALERT_ONLY -> max ALERT
+INSUFFICIENT_DATA -> max ALERT
+ALLOW_EXECUTABLE -> no cap
+Store policy in:
+
+decision["modifiers"]["market_policy"]
+Add concise Telegram text:
+
+Market Policy: ALERT_ONLY
+Reason: retrace_sell on GOLD H1 is negative over rolling sample
+Add nightly policy builder utility
+Create:
+
+utils/update_market_policy.py
+Responsibilities:
+
+Run rolling backtest for the last available recent candles or consume an existing CSV.
+Insert backtest rows into trade_backtest.
+Aggregate performance by:
+epic
+timeframe
+direction
+setup_family
+optionally regime
+optionally memory_bias
+Calculate:
+sample size
+wins
+losses
+open count
+win rate
+total R
+avg R
+profit factor
+max consecutive losses
+recent_total_r
+Generate policy recommendation.
+Initial conservative rules:
+
+sample_size < 10:
+    INSUFFICIENT_DATA
+
+total_r <= -3 or profit_factor < 0.8:
+    WATCH_ONLY or BLOCK if very bad
+
+recent_total_r < -2:
+    ALERT_ONLY or WATCH_ONLY
+
+total_r > 3 and profit_factor >= 1.3 and recent_total_r >= 0 and max_consecutive_losses <= 4:
+    ALLOW_EXECUTABLE
+
+otherwise:
+    ALERT_ONLY
+Never promote to executable based only on score. Policy only removes caps when evidence supports it.
+
+Add command-line options
+utils/update_market_policy.py should support:
+
+python utils/update_market_policy.py --from-csv data/backtest_fast_m15_h1_h4.csv
+python utils/update_market_policy.py --lookback-days 30
+python utils/update_market_policy.py --min-samples 10
+python utils/update_market_policy.py --dry-run
+Add a systemd timer suggestion
+Document a recommended nightly job:
+
+cd /opt/trading-bot
+source venv/bin/activate
+python utils/backtest_signals.py \
+  --instruments gold ethusd crude \
+  --timeframes M15 H1 H4 \
+  --candles 800 \
+  --step 5 \
+  --include-retrace \
+  --outcome-bars 48 \
+  --csv data/nightly_backtest.csv
+
+python utils/update_market_policy.py \
+  --from-csv data/nightly_backtest.csv \
+  --lookback-days 30 \
+  --min-samples 10
+Add safeguards
+If policy table is missing, default to ALERT_ONLY for executable signals, not crash.
+If policy lookup errors, warn and cap executable to ALERT.
+If backtest sample size is low, do not allow executable.
+Keep the decision engine deterministic and explainable.
+Do not use LLM calls.
+Do not add external dependencies.
+Validation
+Run:
+
+python -m compileall -q bot utils
+python utils/update_market_policy.py --from-csv data/backtest_fast_m15_h1_h4.csv --dry-run
+Expected result:
+The bot develops an adaptive policy layer. It can learn that certain combinations, such as OIL_CRUDE H1 SELL, are currently favorable, while others, such as weak GOLD H1 or poor retrace_sell groups, should be downgraded. The live bot remains conservative, but becomes smarter over time based on rolling evidence.
+
+
+**My View**
+
+This is the right direction. Your idea turns the bot from:
+
+```text
+signal scorer
+into:
+
+signal scorer + memory + rolling evidence + policy
