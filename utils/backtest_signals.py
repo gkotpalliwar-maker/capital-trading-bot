@@ -15,6 +15,7 @@ import argparse
 import csv
 import json
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -40,6 +41,26 @@ from strategies.smc_ict import SMCICTStrategy
 import regime_filter
 import signal_decision
 import signal_scorer
+
+
+class PriceActionGuardrails(SignalGuardrails):
+    """Guardrails variant for fast offline replay.
+
+    It keeps the pure price-action checks and skips external intelligence calls
+    that are too slow/noisy for candle-by-candle replay.
+    """
+
+    def check_cot_alignment(self, instrument: str, direction: str):
+        from signal_guardrails import GuardrailResult
+        return GuardrailResult("COT", True, 0, "Skipped in fast backtest")
+
+    def check_tv_consensus(self, instrument: str, direction: str, timeframe: str):
+        from signal_guardrails import GuardrailResult
+        return GuardrailResult("TradingView", True, 0, "Skipped in fast backtest")
+
+    def check_fear_greed(self, direction: str):
+        from signal_guardrails import GuardrailResult
+        return GuardrailResult("Fear/Greed", True, 0, "Skipped in fast backtest")
 
 
 class _Sig:
@@ -149,7 +170,7 @@ def run_backtest(args) -> list[dict]:
     client = _client()
     strategy = SMCICTStrategy()
     retrace = init_retrace_scanner()
-    guardrails = SignalGuardrails(market_intel=None)
+    guardrails = SignalGuardrails(market_intel=None) if args.full_guardrails else PriceActionGuardrails(market_intel=None)
     rows = []
 
     instruments = args.instruments or DEFAULT_INSTRUMENTS
@@ -163,10 +184,28 @@ def run_backtest(args) -> list[dict]:
                 print(f"skip {instrument} {timeframe}: only {len(raw)} candles")
                 continue
 
-            print(f"replay {instrument} {timeframe}: {len(raw)} candles")
+            raw_ind = add_technical_indicators(raw.copy())
             start = max(args.window, 80)
-            for end in range(start, len(raw) + 1, args.step):
-                df = add_technical_indicators(raw.iloc[:end].copy())
+            stop = len(raw) + 1
+            if args.max_steps:
+                stop = min(stop, start + args.max_steps * args.step)
+            total_steps = max(0, len(range(start, stop, args.step)))
+            print(
+                f"replay {instrument} {timeframe}: {len(raw)} candles, "
+                f"{total_steps} steps, step={args.step}, "
+                f"guardrails={'full' if args.full_guardrails else 'fast'}",
+                flush=True,
+            )
+            started = time.time()
+            for step_i, end in enumerate(range(start, stop, args.step), start=1):
+                if args.progress_every and (step_i == 1 or step_i % args.progress_every == 0):
+                    elapsed = time.time() - started
+                    print(
+                        f"  {instrument} {timeframe}: step {step_i}/{total_steps} "
+                        f"end={end} rows={len(rows)} elapsed={elapsed:.1f}s",
+                        flush=True,
+                    )
+                df = raw_ind.iloc[:end].copy()
                 regime = regime_filter.detect_regime(df)
                 signals = strategy.generate_signals(df, instrument, timeframe)
 
@@ -268,8 +307,14 @@ def main() -> int:
     parser.add_argument("--candles", type=int, default=500, help="Candles to fetch per instrument/timeframe")
     parser.add_argument("--window", type=int, default=160, help="Minimum rolling candles before evaluating")
     parser.add_argument("--step", type=int, default=5, help="Replay step in candles")
+    parser.add_argument("--max-steps", type=int, default=0,
+                        help="Maximum replay steps per instrument/timeframe; 0 = all")
+    parser.add_argument("--progress-every", type=int, default=25,
+                        help="Print progress every N replay steps; 0 = silent")
     parser.add_argument("--include-retrace", action="store_true", help="Include retrace-entry candidates")
     parser.add_argument("--use-ml", action="store_true", help="Include current ML scorer")
+    parser.add_argument("--full-guardrails", action="store_true",
+                        help="Use external COT/TradingView/FearGreed guardrails. Slower.")
     parser.add_argument("--technical-only", action="store_true", default=True, help="Skip live news/MTF/dedup context")
     parser.add_argument("--simulate-outcomes", action=argparse.BooleanOptionalAction, default=True,
                         help="Simulate TP/SL outcomes for ALERT/EXECUTABLE rows")
