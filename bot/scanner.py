@@ -158,7 +158,7 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             signal=sig_data,
                             df=df,
                             client=client,
-                            instrument=inst,
+                            instrument=inst_name,
                             timeframe=tf,
                             regime=regime,
                             guardrails=_guardrails,

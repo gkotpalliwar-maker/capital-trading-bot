@@ -1,4 +1,4 @@
 # bot/version.py
-BOT_VERSION = "2.11.0"
+BOT_VERSION = "2.12.0"
 __version__ = BOT_VERSION
-__codename__ = "swing-sl-resilience"
+__codename__ = "market-memory"

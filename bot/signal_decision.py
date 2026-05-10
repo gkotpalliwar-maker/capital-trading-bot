@@ -13,6 +13,11 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("signal_decision")
 
+try:
+    import pattern_memory
+except ImportError:
+    pattern_memory = None
+
 # ── Status Constants ────────────────────────────────────────────
 BLOCK = "BLOCK"          # Hard-blocked or critically low score — never trade
 WATCH = "WATCH"          # Interesting but too weak — log and monitor
@@ -49,6 +54,9 @@ P_REGIME_BLOCK = -100    # Regime hard block
 P_MTF_BLOCK = -20        # MTF misaligned: penalty
 P_STALE_SIGNAL = -100    # Signal entry price already passed
 
+CAP_ALERT = ALERT
+CAP_WATCH = WATCH
+
 
 def _classify_quality(score: int) -> str:
     """Map unified score to quality label."""
@@ -70,6 +78,14 @@ def _classify_status(score: int, has_hard_blocks: bool) -> str:
     if score < SCORE_EXECUTABLE:
         return ALERT
     return EXECUTABLE
+
+
+def _apply_status_cap(status: str, cap: Optional[str]) -> str:
+    if cap == CAP_WATCH and status in (ALERT, EXECUTABLE):
+        return WATCH
+    if cap == CAP_ALERT and status == EXECUTABLE:
+        return ALERT
+    return status
 
 
 def _normalise_guardrail_score(raw_score: int, max_possible: int = 20) -> int:
@@ -104,6 +120,7 @@ def evaluate_signal_candidate(
     news_filter_mod=None,
     ml_scorer_mod=None,
     mtf_func=None,
+    allow_non_top5_executable: bool = False,
 ) -> Dict:
     """
     Central signal decision function.
@@ -152,11 +169,14 @@ def evaluate_signal_candidate(
         "ml_score": None, "news_status": "unchecked",
         "regime_ok": True, "mtf_aligned": None,
         "is_duplicate": False, "rr_ratio": 0.0,
+        "market_memory": None, "status_cap": None,
     }
     guardrail_result = None
     direction = signal.get("direction", "")
     zone_types = signal.get("zone_types", "")
     is_retrace = "retrace" in zone_types
+    is_top5 = bool(signal.get("top5"))
+    status_cap = None
 
     # ================================================================
     # 1. GUARDRAILS (0-50 points)
@@ -165,7 +185,7 @@ def evaluate_signal_candidate(
         try:
             gr = guardrails.evaluate_signal(
                 df=df, instrument=instrument, direction=direction,
-                timeframe=timeframe, signal_metadata=signal.get("metadata"),
+                timeframe=timeframe, signal_metadata=signal,
             )
             guardrail_result = gr
             raw = gr.get("final_score", 0)
@@ -239,7 +259,8 @@ def evaluate_signal_candidate(
                 from news_filter import NEWS_REQUIRED as _news_req2
                 if _news_req2:
                     score += P_NEWS_UNAVAIL
-                    warnings.append(f"News REQUIRED but errored ({P_NEWS_UNAVAIL:+d})")
+                    status_cap = CAP_ALERT
+                    warnings.append(f"News REQUIRED but errored; executable capped at ALERT ({P_NEWS_UNAVAIL:+d})")
             except ImportError:
                 pass
     else:
@@ -249,7 +270,8 @@ def evaluate_signal_candidate(
             from news_filter import NEWS_REQUIRED as _news_req
             if _news_req:
                 score += P_NEWS_UNAVAIL
-                warnings.append(f"News REQUIRED but unavailable ({P_NEWS_UNAVAIL:+d})")
+                status_cap = CAP_ALERT
+                warnings.append(f"News REQUIRED but unavailable; executable capped at ALERT ({P_NEWS_UNAVAIL:+d})")
         except ImportError:
             pass  # news_filter not installed at all — no penalty
 
@@ -320,7 +342,34 @@ def evaluate_signal_candidate(
         warnings.append(f"R:R {float(rr):.1f} < 1.0 (no penalty, but weak)")
 
     # ================================================================
-    # 7. STALE SIGNAL CHECK (hard block)
+    # 7. MARKET MEMORY (contextual adjustment only)
+    # ================================================================
+    if pattern_memory is not None:
+        try:
+            memory = pattern_memory.evaluate_market_memory(
+                instrument=instrument,
+                timeframe=timeframe,
+                direction=direction,
+                signal=signal,
+                df=df,
+            )
+            modifiers["market_memory"] = memory
+            score += int(memory.get("score_adj", 0) or 0)
+            for reason in memory.get("reasons", []):
+                reasons.append(f"Memory: {reason}")
+            for warning in memory.get("warnings", []):
+                warnings.append(f"Memory: {warning}")
+            for block in memory.get("blocks", []):
+                blocks.append(f"Memory: {block}")
+        except Exception as e:
+            logger.warning("Market memory error: %s", e)
+            modifiers["market_memory"] = {"bias": "neutral", "score_adj": 0, "warnings": [str(e)]}
+            warnings.append(f"Market memory error: {e}")
+    else:
+        modifiers["market_memory"] = {"bias": "neutral", "score_adj": 0, "warnings": ["module unavailable"]}
+
+    # ================================================================
+    # 8. STALE SIGNAL CHECK (hard block)
     # ================================================================
     is_stale, stale_reason = _check_stale_signal(signal, df)
     if is_stale:
@@ -340,12 +389,18 @@ def evaluate_signal_candidate(
         except Exception as e:
             logger.warning("Dedup check error: %s", e)
 
+    if not is_top5 and not allow_non_top5_executable:
+        status_cap = CAP_ALERT if status_cap is None else status_cap
+        warnings.append("Non-top5 setup: executable capped at ALERT")
+    modifiers["status_cap"] = status_cap
+
     # ================================================================
     # FINAL DECISION
     # ================================================================
     score = max(0, min(100, score))
     has_blocks = len(blocks) > 0
     status = _classify_status(score, has_blocks)
+    status = _apply_status_cap(status, status_cap)
     quality = _classify_quality(score)
 
     # ── Build Telegram text ─────────────────────────────────────
@@ -373,6 +428,17 @@ def evaluate_signal_candidate(
         tg_lines.append("\n<b>🚫 Blocks:</b>")
         for b in blocks:
             tg_lines.append(f"  • {b}")
+
+    memory = modifiers.get("market_memory") or {}
+    if memory:
+        tg_lines.append(
+            f"\n<b>Market Memory:</b> {memory.get('bias', 'neutral')} "
+            f"({int(memory.get('score_adj', 0) or 0):+d})"
+        )
+        for r in memory.get("reasons", [])[:3]:
+            tg_lines.append(f"  * {r}")
+        for w in memory.get("warnings", [])[:2]:
+            tg_lines.append(f"  * {w}")
 
     # Include guardrail detail if available
     if guardrail_result and guardrail_result.get("telegram_text"):
