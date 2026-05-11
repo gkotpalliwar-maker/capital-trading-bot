@@ -277,50 +277,50 @@ def scan_and_notify(client, strategy, instruments, timeframes):
 
                     all_signals.append(sig_data)
 
-            # ── v2.12.1: Conflict Arbitration (after all TFs scanned for this instrument) ──
-            if inst_candidates:
-                if HAS_CONFLICT_ARBITER and conflict_arbiter:
-                    arb_results = conflict_arbiter.arbitrate_instrument(
-                        inst_candidates, memory_bias=inst_memory_bias)
-                    arb_summary = conflict_arbiter.get_arbitration_summary(arb_results)
-                    if arb_summary:
-                        logger.info("  ARBITRATION %s: %s", inst_name, arb_summary)
-                    for sig_d, dec, action in arb_results:
-                        sig_row_id = db.save_signal(sig_d)
-                        sig_d["_db_id"] = sig_row_id
-                        sig_d["_created_at"] = time.time()
-                        if dec["status"] == signal_decision.EXECUTABLE:
-                            logger.info("  EXECUTABLE: %s %s [%s] score=%d [%s]",
-                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
-                            telegram_bot.notify_signal(sig_d)
-                        elif dec["status"] == signal_decision.ALERT:
-                            logger.info("  ALERT: %s %s [%s] score=%d [%s]",
-                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
-                            telegram_bot.notify_signal(sig_d, executable=False)
-                        else:  # demoted to WATCH by arbiter
-                            db.mark_signal(sig_row_id, "arb_demoted")
-                            logger.info("  ARB_DEMOTED: %s %s [%s] score=%d [%s]",
-                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
-                        all_signals.append(sig_d)
-                else:
-                    # No arbiter available — dispatch all normally
-                    for sig_d, dec in inst_candidates:
-                        sig_row_id = db.save_signal(sig_d)
-                        sig_d["_db_id"] = sig_row_id
-                        sig_d["_created_at"] = time.time()
-                        if dec["status"] == signal_decision.EXECUTABLE:
-                            telegram_bot.notify_signal(sig_d)
-                            logger.info("  EXECUTABLE: %s %s [%s] score=%d",
-                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
-                        else:
-                            telegram_bot.notify_signal(sig_d, executable=False)
-                            logger.info("  ALERT: %s %s [%s] score=%d",
-                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
-                        all_signals.append(sig_d)
-
             except Exception as e:
                 db.log_error("strategy", f"Scan error {inst}/{tf}", traceback.format_exc())
                 logger.info("  SCAN ERROR %s/%s: %s", inst, tf, e)
+
+        # ── v2.12.1: Conflict Arbitration (after all TFs scanned for this instrument) ──
+        if inst_candidates:
+            if HAS_CONFLICT_ARBITER and conflict_arbiter:
+                arb_results = conflict_arbiter.arbitrate_instrument(
+                    inst_candidates, memory_bias=inst_memory_bias)
+                arb_summary = conflict_arbiter.get_arbitration_summary(arb_results)
+                if arb_summary:
+                    logger.info("  ARBITRATION %s: %s", inst_name, arb_summary)
+                for sig_d, dec, action in arb_results:
+                    sig_row_id = db.save_signal(sig_d)
+                    sig_d["_db_id"] = sig_row_id
+                    sig_d["_created_at"] = time.time()
+                    if dec["status"] == signal_decision.EXECUTABLE:
+                        logger.info("  EXECUTABLE: %s %s [%s] score=%d [%s]",
+                            inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                        telegram_bot.notify_signal(sig_d)
+                    elif dec["status"] == signal_decision.ALERT:
+                        logger.info("  ALERT: %s %s [%s] score=%d [%s]",
+                            inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                        telegram_bot.notify_signal(sig_d, executable=False)
+                    else:  # demoted to WATCH by arbiter
+                        db.mark_signal(sig_row_id, "arb_demoted")
+                        logger.info("  ARB_DEMOTED: %s %s [%s] score=%d [%s]",
+                            inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                    all_signals.append(sig_d)
+            else:
+                # No arbiter available — dispatch all normally
+                for sig_d, dec in inst_candidates:
+                    sig_row_id = db.save_signal(sig_d)
+                    sig_d["_db_id"] = sig_row_id
+                    sig_d["_created_at"] = time.time()
+                    if dec["status"] == signal_decision.EXECUTABLE:
+                        telegram_bot.notify_signal(sig_d)
+                        logger.info("  EXECUTABLE: %s %s [%s] score=%d",
+                            inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
+                    else:
+                        telegram_bot.notify_signal(sig_d, executable=False)
+                        logger.info("  ALERT: %s %s [%s] score=%d",
+                            inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
+                    all_signals.append(sig_d)
 
     top5_count = sum(1 for s in all_signals if s.get("top5"))
     logger.info("Scan complete: %d total | %d top-5", len(all_signals), top5_count)
