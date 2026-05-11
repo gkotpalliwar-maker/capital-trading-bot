@@ -369,6 +369,19 @@ def evaluate_signal_candidate(
         modifiers["market_memory"] = {"bias": "neutral", "score_adj": 0, "warnings": ["module unavailable"]}
 
     # ================================================================
+    # 7b. BOS ZONE PENALTY (-15 for BOS-only entries)  [v2.12.2]
+    # Backtest: BOS entries = 0% WR across 8 trades (-8.00R net).
+    # BOS = late entry after structure break — price often retraces.
+    # Retrace+BOS combos are exempt (the retrace provides better entry).
+    # ================================================================
+    P_BOS_ZONE = -15
+    if "bos" in zone_types and "retrace" not in zone_types:
+        score += P_BOS_ZONE
+        warnings.append(f"BOS zone penalty: late-entry risk ({P_BOS_ZONE:+d})")
+        logger.debug("BOS penalty applied: %s %s %s zones=%s",
+                     instrument, direction, timeframe, zone_types)
+
+    # ================================================================
     # 8. STALE SIGNAL CHECK (hard block)
     # ================================================================
     is_stale, stale_reason = _check_stale_signal(signal, df)
