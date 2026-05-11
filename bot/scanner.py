@@ -80,6 +80,15 @@ except ImportError as e:
     logger.warning(f"Decision engine not available, using legacy flow: {e}")
     HAS_DECISION_ENGINE = False
     signal_decision = None
+
+# v2.12.1: Conflict Arbiter
+try:
+    import conflict_arbiter
+    HAS_CONFLICT_ARBITER = True
+    logger.info("Conflict arbiter v2.12.1 loaded")
+except ImportError:
+    HAS_CONFLICT_ARBITER = False
+    conflict_arbiter = None
     _news_filter_mod = None
     _ml_scorer_mod = None
 
@@ -104,6 +113,8 @@ def scan_and_notify(client, strategy, instruments, timeframes):
 
     for inst in instruments:
         inst_name = resolve_instrument(inst)
+        inst_candidates = []  # v2.12.1: collect ALERT/EXECUTABLE before arbitrating
+        inst_memory_bias = None
         for tf in timeframes:
             try:
                 df = fetch_candles(client, inst, tf, count=500)
@@ -188,25 +199,15 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             db.mark_signal(sig_row_id, "watch")
                             all_signals.append(sig_data)
                             continue
-                        elif status == signal_decision.ALERT:
-                            logger.info("  ALERT: %s %s [%s] score=%d quality=%s",
-                                inst_name, sig.direction, tf, decision["score"],
-                                decision["quality"])
-                            sig_row_id = db.save_signal(sig_data)
-                            sig_data["_db_id"] = sig_row_id
-                            sig_data["_created_at"] = time.time()
-                            telegram_bot.notify_signal(sig_data, executable=False)
-                            all_signals.append(sig_data)
-                            continue
-                        else:  # EXECUTABLE
-                            logger.info("  EXECUTABLE: %s %s [%s] score=%d quality=%s",
-                                inst_name, sig.direction, tf, decision["score"],
-                                decision["quality"])
-                            sig_row_id = db.save_signal(sig_data)
-                            sig_data["_db_id"] = sig_row_id
-                            sig_data["_created_at"] = time.time()
-                            telegram_bot.notify_signal(sig_data)
-                            all_signals.append(sig_data)
+                        else:
+                            # v2.12.1: ALERT/EXECUTABLE — collect for conflict arbitration
+                            logger.info("  CANDIDATE: %s %s [%s] score=%d status=%s",
+                                inst_name, sig.direction, tf, decision["score"], status)
+                            inst_candidates.append((sig_data.copy(), decision))
+                            # Capture memory bias if available
+                            mem = decision.get("modifiers", {}).get("market_memory", {})
+                            if mem and mem.get("bias"):
+                                inst_memory_bias = mem["bias"]
                             continue
 
                     # ── Legacy flow (fallback if decision engine unavailable) ──
@@ -275,6 +276,48 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                         sig_data["_db_id"] = sig_row_id
 
                     all_signals.append(sig_data)
+
+            # ── v2.12.1: Conflict Arbitration (after all TFs scanned for this instrument) ──
+            if inst_candidates:
+                if HAS_CONFLICT_ARBITER and conflict_arbiter:
+                    arb_results = conflict_arbiter.arbitrate_instrument(
+                        inst_candidates, memory_bias=inst_memory_bias)
+                    arb_summary = conflict_arbiter.get_arbitration_summary(arb_results)
+                    if arb_summary:
+                        logger.info("  ARBITRATION %s: %s", inst_name, arb_summary)
+                    for sig_d, dec, action in arb_results:
+                        sig_row_id = db.save_signal(sig_d)
+                        sig_d["_db_id"] = sig_row_id
+                        sig_d["_created_at"] = time.time()
+                        if dec["status"] == signal_decision.EXECUTABLE:
+                            logger.info("  EXECUTABLE: %s %s [%s] score=%d [%s]",
+                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                            telegram_bot.notify_signal(sig_d)
+                        elif dec["status"] == signal_decision.ALERT:
+                            logger.info("  ALERT: %s %s [%s] score=%d [%s]",
+                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                            telegram_bot.notify_signal(sig_d, executable=False)
+                        else:  # demoted to WATCH by arbiter
+                            db.mark_signal(sig_row_id, "arb_demoted")
+                            logger.info("  ARB_DEMOTED: %s %s [%s] score=%d [%s]",
+                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
+                        all_signals.append(sig_d)
+                else:
+                    # No arbiter available — dispatch all normally
+                    for sig_d, dec in inst_candidates:
+                        sig_row_id = db.save_signal(sig_d)
+                        sig_d["_db_id"] = sig_row_id
+                        sig_d["_created_at"] = time.time()
+                        if dec["status"] == signal_decision.EXECUTABLE:
+                            telegram_bot.notify_signal(sig_d)
+                            logger.info("  EXECUTABLE: %s %s [%s] score=%d",
+                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
+                        else:
+                            telegram_bot.notify_signal(sig_d, executable=False)
+                            logger.info("  ALERT: %s %s [%s] score=%d",
+                                inst_name, sig_d["direction"], sig_d["tf"], dec["score"])
+                        all_signals.append(sig_d)
+
             except Exception as e:
                 db.log_error("strategy", f"Scan error {inst}/{tf}", traceback.format_exc())
                 logger.info("  SCAN ERROR %s/%s: %s", inst, tf, e)
