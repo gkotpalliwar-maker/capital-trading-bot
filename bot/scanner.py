@@ -92,6 +92,13 @@ except ImportError:
     _news_filter_mod = None
     _ml_scorer_mod = None
 
+# v2.13.0: Retrace-Only Mode
+# When True: only retrace signals fire (bypass decision engine).
+# Non-retrace signals are logged but blocked.
+# Backtest proof: retrace-only = 40% WR (+2.97R) vs full system = 23% WR (-6.03R)
+RETRACE_ONLY_MODE = os.environ.get("RETRACE_ONLY_MODE", "true").lower() == "true"
+if RETRACE_ONLY_MODE:
+    logger.info("  RETRACE-ONLY MODE active — non-retrace signals will be blocked")
 _running = True
 
 def _signal_handler(sig, frame):
@@ -162,6 +169,53 @@ def scan_and_notify(client, strategy, instruments, timeframes):
 
                     }
                     sig_data["regime"] = regime.get("label", "")
+
+                    # ── v2.13.0: Retrace-Only Mode Gate ──
+                    if RETRACE_ONLY_MODE:
+                        if "retrace" not in zt:
+                            # Block non-retrace signals silently
+                            sig_row_id = db.save_signal(sig_data)
+                            db.mark_signal(sig_row_id, "retrace_mode_block")
+                            all_signals.append(sig_data)
+                            continue
+                        else:
+                            # Retrace signal — minimal checks then fire directly
+                            rr_val = sig_data.get("rr", 0)
+                            if rr_val < 1.5:
+                                logger.info("  RETRACE SKIP (R:R %.1f < 1.5): %s %s [%s]",
+                                    rr_val, inst_name, sig.direction, tf)
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "rr_too_low")
+                                all_signals.append(sig_data)
+                                continue
+                            # Dedup check
+                            is_dup, dup_reason = risk_manager.check_duplicate_signal(
+                                inst, sig.direction, tf)
+                            if is_dup:
+                                logger.info("  RETRACE DEDUP: %s %s [%s] - %s",
+                                    inst_name, sig.direction, tf, dup_reason)
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "dedup")
+                                all_signals.append(sig_data)
+                                continue
+                            # ✅ Fire as ALERT — bypass decision engine
+                            sig_data["decision"] = {
+                                "status": "ALERT", "score": 0, "quality": "retrace_mode",
+                                "reasons": ["retrace-only mode: direct fire"],
+                                "blocks": [], "warnings": [],
+                                "modifiers": {"retrace_only_mode": True},
+                            }
+                            sig_data["guardrail_text"] = ""
+                            sig_data["guardrail_score"] = 0
+                            sig_row_id = db.save_signal(sig_data)
+                            sig_data["_db_id"] = sig_row_id
+                            sig_data["_created_at"] = time.time()
+                            telegram_bot.notify_signal(sig_data)
+                            logger.info("  RETRACE FIRE: %s %s [%s] R:R=%.1f zones=%s",
+                                inst_name, sig.direction, tf, rr_val, zt)
+                            all_signals.append(sig_data)
+                            continue
+
 
                     # ── v2.10.0: Signal Decision Engine ──
                     if HAS_DECISION_ENGINE and signal_decision is not None:
