@@ -1,4 +1,4 @@
 # bot/version.py
-BOT_VERSION = "2.12.1"
+BOT_VERSION = "2.12.2"
 __version__ = BOT_VERSION
-__codename__ = "conflict-arbiter"
+__codename__ = "bos-filter"
