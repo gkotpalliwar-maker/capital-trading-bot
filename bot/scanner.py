@@ -198,6 +198,19 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 db.mark_signal(sig_row_id, "dedup")
                                 all_signals.append(sig_data)
                                 continue
+                            # Stale price check (v2.13.1 fix)
+                            current_price = float(df["close"].iloc[-1])
+                            entry_price = sig_data.get("entry", 0)
+                            if entry_price > 0:
+                                drift_pct = abs(current_price - entry_price) / entry_price * 100
+                                if drift_pct > 0.3:
+                                    logger.info("  RETRACE STALE: %s %s [%s] drift=%.2f%% (entry=%.5f, current=%.5f)",
+                                        inst_name, sig.direction, tf, drift_pct, entry_price, current_price)
+                                    sig_row_id = db.save_signal(sig_data)
+                                    db.mark_signal(sig_row_id, "stale_price")
+                                    all_signals.append(sig_data)
+                                    continue
+
                             # ✅ Fire as ALERT — bypass decision engine
                             sig_data["decision"] = {
                                 "status": "ALERT", "score": 0, "quality": "retrace_mode",
