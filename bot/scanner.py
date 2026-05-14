@@ -99,6 +99,13 @@ except ImportError:
 RETRACE_ONLY_MODE = os.environ.get("RETRACE_ONLY_MODE", "true").lower() == "true"
 if RETRACE_ONLY_MODE:
     logger.info("  RETRACE-ONLY MODE active — non-retrace signals will be blocked")
+# v2.13.2: Track recently-fired retrace signals to prevent repeated alerts
+# Key = (instrument, direction, timeframe), Value = timestamp of last fire/stale
+_retrace_signal_cooldown = {}  # persists across scan cycles (module-level)
+RETRACE_COOLDOWN_SEC = {
+    "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
+}
+
 _running = True
 
 def _signal_handler(sig, frame):
@@ -188,6 +195,15 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 db.mark_signal(sig_row_id, "rr_too_low")
                                 all_signals.append(sig_data)
                                 continue
+# v2.13.2: Cooldown — don't re-signal same inst/dir/tf within candle period
+                            _cd_key = (inst, sig.direction, tf)
+                            _cd_sec = RETRACE_COOLDOWN_SEC.get(tf, 3600)
+                            if _cd_key in _retrace_signal_cooldown:
+                                _elapsed = time.time() - _retrace_signal_cooldown[_cd_key]
+                                if _elapsed < _cd_sec:
+                                    # Still in cooldown — skip silently (don't even log or save to DB)
+                                    continue
+
                             # Dedup check
                             is_dup, dup_reason = risk_manager.check_duplicate_signal(
                                 inst, sig.direction, tf)
@@ -198,18 +214,27 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 db.mark_signal(sig_row_id, "dedup")
                                 all_signals.append(sig_data)
                                 continue
-                            # Stale price check (v2.13.1 fix)
+# Stale price check — directional (v2.13.2)
                             current_price = float(df["close"].iloc[-1])
                             entry_price = sig_data.get("entry", 0)
                             if entry_price > 0:
-                                drift_pct = abs(current_price - entry_price) / entry_price * 100
-                                if drift_pct > 0.3:
-                                    logger.info("  RETRACE STALE: %s %s [%s] drift=%.2f%% (entry=%.5f, current=%.5f)",
-                                        inst_name, sig.direction, tf, drift_pct, entry_price, current_price)
+                                if sig.direction == "BUY" and current_price > entry_price * 1.003:
+                                    logger.info("  RETRACE STALE: %s BUY [%s] entry=%.5f already passed (current=%.5f)",
+                                        inst_name, tf, entry_price, current_price)
+                                    _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                     sig_row_id = db.save_signal(sig_data)
                                     db.mark_signal(sig_row_id, "stale_price")
                                     all_signals.append(sig_data)
                                     continue
+                                elif sig.direction == "SELL" and current_price < entry_price * 0.997:
+                                    logger.info("  RETRACE STALE: %s SELL [%s] entry=%.5f already passed (current=%.5f)",
+                                        inst_name, tf, entry_price, current_price)
+                                    _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
+                                    sig_row_id = db.save_signal(sig_data)
+                                    db.mark_signal(sig_row_id, "stale_price")
+                                    all_signals.append(sig_data)
+                                    continue
+
 
                             # ✅ Fire as ALERT — bypass decision engine
                             sig_data["decision"] = {
