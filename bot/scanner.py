@@ -105,6 +105,7 @@ _retrace_signal_cooldown = {}  # persists across scan cycles (module-level)
 RETRACE_COOLDOWN_SEC = {
     "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
 }
+RETRACE_MAX_PCT = 150  # v2.13.3: skip signals with retrace > 150% (zone is spent)
 
 _running = True
 
@@ -157,6 +158,8 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                     except Exception as e:
                         logger.warning(f'Retrace scan error {inst} {tf}: {e}')
 
+                # v2.13.3: Track fired directions per inst+tf this cycle (conflict resolution)
+                _cycle_fired = {}  # (inst, tf) -> direction
                 for sig in signals:
                     # ── Build sig_data (same structure for DB/Telegram compat) ──
                     zt = sig.metadata.get("zone_types", "")
@@ -193,6 +196,17 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                     rr_val, inst_name, sig.direction, tf)
                                 sig_row_id = db.save_signal(sig_data)
                                 db.mark_signal(sig_row_id, "rr_too_low")
+                                all_signals.append(sig_data)
+                                continue
+
+                            # v2.13.3: Retrace cap — zone is spent if retrace > 150%
+                            retrace_pct = sig.metadata.get('retrace_pct', 0)
+                            if retrace_pct > RETRACE_MAX_PCT:
+                                logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %d%% (zone spent)",
+                                    inst_name, sig.direction, tf, retrace_pct, RETRACE_MAX_PCT)
+                                _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "retrace_cap")
                                 all_signals.append(sig_data)
                                 continue
 # v2.13.2: Cooldown — don't re-signal same inst/dir/tf within candle period
@@ -236,6 +250,28 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                     continue
 
 
+                            # v2.13.3: Conflict check — block if opposite direction fired
+                            _fire_key = (inst, tf)
+                            if _fire_key in _cycle_fired and _cycle_fired[_fire_key] != sig.direction:
+                                logger.info("  RETRACE CONFLICT: %s %s [%s] blocked (opposite %s already fired)",
+                                    inst_name, sig.direction, tf, _cycle_fired[_fire_key])
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "conflict_block")
+                                all_signals.append(sig_data)
+                                continue
+                            # Cross-cycle conflict: block if opposite fired recently
+                            _opp_dir = 'SELL' if sig.direction == 'BUY' else 'BUY'
+                            _opp_cd_key = (inst, _opp_dir, tf)
+                            if _opp_cd_key in _retrace_signal_cooldown:
+                                _opp_elapsed = time.time() - _retrace_signal_cooldown[_opp_cd_key]
+                                if _opp_elapsed < RETRACE_COOLDOWN_SEC.get(tf, 3600):
+                                    logger.info("  RETRACE CONFLICT (cross-cycle): %s %s [%s] blocked (%s fired %dm ago)",
+                                        inst_name, sig.direction, tf, _opp_dir, int(_opp_elapsed/60))
+                                    sig_row_id = db.save_signal(sig_data)
+                                    db.mark_signal(sig_row_id, "conflict_cross_cycle")
+                                    all_signals.append(sig_data)
+                                    continue
+
                             # ✅ Fire as ALERT — bypass decision engine
                             sig_data["decision"] = {
                                 "status": "ALERT", "score": 0, "quality": "retrace_mode",
@@ -252,6 +288,8 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             logger.info("  RETRACE FIRE: %s %s [%s] R:R=%.1f zones=%s",
                                 inst_name, sig.direction, tf, rr_val, zt)
                             all_signals.append(sig_data)
+                            _cycle_fired[(inst, tf)] = sig.direction  # v2.13.3
+                            _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()  # v2.13.3
                             continue
 
 
