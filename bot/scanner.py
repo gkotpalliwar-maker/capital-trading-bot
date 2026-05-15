@@ -105,7 +105,7 @@ _retrace_signal_cooldown = {}  # persists across scan cycles (module-level)
 RETRACE_COOLDOWN_SEC = {
     "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
 }
-RETRACE_MAX_PCT = 150  # v2.13.3: skip signals with retrace > 150% (zone is spent)
+RETRACE_MAX_PCT = 100  # v2.13.3: skip signals with retrace > 100% (zone fully penetrated)
 
 _running = True
 
@@ -202,7 +202,7 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             # v2.13.3: Retrace cap — zone is spent if retrace > 150%
                             retrace_pct = sig.metadata.get('retrace_pct', 0)
                             if retrace_pct > RETRACE_MAX_PCT:
-                                logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %d%% (zone spent)",
+                                logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %d%% (entry already passed)",
                                     inst_name, sig.direction, tf, retrace_pct, RETRACE_MAX_PCT)
                                 _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                 sig_row_id = db.save_signal(sig_data)
