@@ -106,6 +106,9 @@ RETRACE_COOLDOWN_SEC = {
     "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
 }
 RETRACE_MAX_PCT = 100  # v2.13.3: skip signals with retrace > 100% (zone fully penetrated)
+MACD_FILTER_ENABLED = os.environ.get("MACD_FILTER_ENABLED", "true").lower() == "true"
+if MACD_FILTER_ENABLED:
+    logger.info("  MACD directional filter active (block counter-trend entries)")
 
 _running = True
 
@@ -209,6 +212,35 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 db.mark_signal(sig_row_id, "retrace_cap")
                                 all_signals.append(sig_data)
                                 continue
+
+                            # v2.14.0: MACD histogram directional filter
+                            # Block counter-trend entries: SELL in bullish, BUY in strong bearish
+                            if MACD_FILTER_ENABLED and 'macd_hist' in df.columns and len(df) >= 2:
+                                _macd_hist = float(df['macd_hist'].iloc[-1])
+                                _macd_hist_prev = float(df['macd_hist'].iloc[-2])
+                                _atr_val = float(df['atr'].iloc[-1]) if 'atr' in df.columns else 0
+                                # Near-zero bypass: if histogram < 0.5% of ATR, treat as flat
+                                _macd_flat = abs(_macd_hist) < (_atr_val * 0.005) if _atr_val > 0 else False
+                                if not _macd_flat:
+                                    if sig.direction == 'SELL' and _macd_hist > 0:
+                                        # Bullish histogram -> block SELL
+                                        logger.info("  MACD BLOCK: %s SELL [%s] blocked (hist=%.4f > 0, bullish momentum)",
+                                            inst_name, tf, _macd_hist)
+                                        _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
+                                        sig_row_id = db.save_signal(sig_data)
+                                        db.mark_signal(sig_row_id, "macd_filter")
+                                        all_signals.append(sig_data)
+                                        continue
+                                    elif sig.direction == 'BUY' and _macd_hist < 0 and _macd_hist < _macd_hist_prev:
+                                        # Bearish histogram AND getting worse -> block BUY
+                                        logger.info("  MACD BLOCK: %s BUY [%s] blocked (hist=%.4f < 0 & falling, bearish momentum)",
+                                            inst_name, tf, _macd_hist)
+                                        _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
+                                        sig_row_id = db.save_signal(sig_data)
+                                        db.mark_signal(sig_row_id, "macd_filter")
+                                        all_signals.append(sig_data)
+                                        continue
+
 # v2.13.2: Cooldown — don't re-signal same inst/dir/tf within candle period
                             _cd_key = (inst, sig.direction, tf)
                             _cd_sec = RETRACE_COOLDOWN_SEC.get(tf, 3600)
