@@ -105,8 +105,16 @@ _retrace_signal_cooldown = {}  # persists across scan cycles (module-level)
 RETRACE_COOLDOWN_SEC = {
     "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
 }
+RETRACE_MAX_LIVE_AGE = {
+    "M15": int(os.environ.get("RETRACE_MAX_AGE_M15", "2")),
+    "M30": int(os.environ.get("RETRACE_MAX_AGE_M30", "1")),
+    "H1": int(os.environ.get("RETRACE_MAX_AGE_H1", "1")),
+    "H4": int(os.environ.get("RETRACE_MAX_AGE_H4", "1")),
+    "D1": int(os.environ.get("RETRACE_MAX_AGE_D1", "1")),
+}
 RETRACE_MAX_PCT = float(os.environ.get("RETRACE_MAX_PCT", "250"))
 logger.info("  Retrace max depth: %.0f%%", RETRACE_MAX_PCT)
+logger.info("  Retrace live max age: %s", RETRACE_MAX_LIVE_AGE)
 MACD_FILTER_ENABLED = os.environ.get("MACD_FILTER_ENABLED", "true").lower() == "true"
 if MACD_FILTER_ENABLED:
     logger.info("  MACD directional filter active (block counter-trend entries)")
@@ -204,6 +212,17 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 continue
 
                             # v2.13.3: Retrace cap — zone is spent if retrace > 150%
+                            candle_idx = int(sig.metadata.get("candle_index", len(df) - 1))
+                            signal_age = max(0, (len(df) - 1) - candle_idx)
+                            max_live_age = RETRACE_MAX_LIVE_AGE.get(tf, 1)
+                            if signal_age > max_live_age:
+                                logger.info("  RETRACE AGE BLOCK: %s %s [%s] signal_age=%d candles > %d",
+                                    inst_name, sig.direction, tf, signal_age, max_live_age)
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "retrace_age")
+                                all_signals.append(sig_data)
+                                continue
+
                             retrace_pct = sig.metadata.get('retrace_pct', 0)
                             if retrace_pct > RETRACE_MAX_PCT:
                                 logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %.0f%% (deep extension)",

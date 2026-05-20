@@ -1,6 +1,6 @@
-VERSION = "2.14.1"
-BOT_VERSION = "2.14.1"
+VERSION = "2.14.2"
+BOT_VERSION = "2.14.2"
 __version__ = BOT_VERSION
 __codename__ = "retrace-only"
 
-CODENAME = "retrace-depth-tuning"
+CODENAME = "retrace-freshness"
