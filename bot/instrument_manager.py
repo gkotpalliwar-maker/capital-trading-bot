@@ -7,7 +7,7 @@ INSTRUMENTS_JSON = DATA_DIR / "instruments.json"
 _config_lock = Lock()
 BASE_INSTRUMENT_MAP = {"crude":"OIL_CRUDE","gold":"GOLD","silver":"SILVER","btcusd":"BTCUSD","ethusd":"ETHUSD","eurusd":"EURUSD","gbpusd":"GBPUSD","usdjpy":"USDJPY","audusd":"AUDUSD","nzdusd":"NZDUSD","usdcad":"USDCAD","usdchf":"USDCHF","nas100":"US100","spx500":"US500","us30":"US30","de40":"DE40","solusd":"SOLUSD","naturalgas":"NATURALGAS","audchf":"AUDCHF","cadchf":"CADCHF"}
 BASE_PIP_SIZE = {"OIL_CRUDE":0.01,"GOLD":0.01,"SILVER":0.001,"BTCUSD":1.0,"ETHUSD":0.01,"EURUSD":0.0001,"GBPUSD":0.0001,"USDJPY":0.01,"AUDUSD":0.0001,"NZDUSD":0.0001,"USDCAD":0.0001,"USDCHF":0.0001,"US100":1.0,"US500":0.1,"US30":1.0,"DE40":1.0,"SOLUSD":0.01,"NATURALGAS":0.001,"AUDCHF":0.0001,"CADCHF":0.0001}
-BASE_DEFAULT_SIZE = {"OIL_CRUDE":1,"GOLD":0.01,"SILVER":0.1,"BTCUSD":0.01,"ETHUSD":0.1,"EURUSD":1000,"GBPUSD":1000,"USDJPY":1000,"AUDUSD":1000,"NZDUSD":1000,"USDCAD":1000,"USDCHF":1000,"US100":0.1,"US500":0.1,"US30":0.1,"DE40":0.1,"SOLUSD":1.0,"NATURALGAS":1.0,"AUDCHF":1000,"CADCHF":1000}
+BASE_DEFAULT_SIZE = {"OIL_CRUDE":1,"GOLD":0.01,"SILVER":0.1,"BTCUSD":0.01,"ETHUSD":0.1,"EURUSD":1000,"GBPUSD":1000,"USDJPY":1000,"AUDUSD":1000,"NZDUSD":1000,"USDCAD":1000,"USDCHF":1000,"US100":0.1,"US500":0.1,"US30":0.1,"DE40":0.1,"SOLUSD":5,"NATURALGAS":500,"AUDCHF":1000,"CADCHF":1000}
 BASE_SCAN_INSTRUMENTS = ["gold","crude","eurusd","gbpusd","usdjpy","btcusd","ethusd","nas100","spx500","de40","solusd","naturalgas","audchf","cadchf"]
 def _load_overrides():
     if not INSTRUMENTS_JSON.exists(): return {"added":{},"removed":[],"lot_overrides":{},"pip_overrides":{},"scan_list":None}
