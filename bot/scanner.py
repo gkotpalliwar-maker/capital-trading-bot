@@ -100,12 +100,13 @@ RETRACE_ONLY_MODE = os.environ.get("RETRACE_ONLY_MODE", "true").lower() == "true
 if RETRACE_ONLY_MODE:
     logger.info("  RETRACE-ONLY MODE active — non-retrace signals will be blocked")
 # v2.13.2: Track recently-fired retrace signals to prevent repeated alerts
-# Key = (instrument, direction, timeframe), Value = timestamp of last fire/stale
+# Key = (instrument, direction, timeframe), Value = timestamp of last fired signal
 _retrace_signal_cooldown = {}  # persists across scan cycles (module-level)
 RETRACE_COOLDOWN_SEC = {
     "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400
 }
-RETRACE_MAX_PCT = 100  # v2.13.3: skip signals with retrace > 100% (zone fully penetrated)
+RETRACE_MAX_PCT = float(os.environ.get("RETRACE_MAX_PCT", "250"))
+logger.info("  Retrace max depth: %.0f%%", RETRACE_MAX_PCT)
 MACD_FILTER_ENABLED = os.environ.get("MACD_FILTER_ENABLED", "true").lower() == "true"
 if MACD_FILTER_ENABLED:
     logger.info("  MACD directional filter active (block counter-trend entries)")
@@ -205,9 +206,8 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             # v2.13.3: Retrace cap — zone is spent if retrace > 150%
                             retrace_pct = sig.metadata.get('retrace_pct', 0)
                             if retrace_pct > RETRACE_MAX_PCT:
-                                logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %d%% (entry already passed)",
+                                logger.info("  RETRACE CAP: %s %s [%s] retrace=%.0f%% > %.0f%% (deep extension)",
                                     inst_name, sig.direction, tf, retrace_pct, RETRACE_MAX_PCT)
-                                _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                 sig_row_id = db.save_signal(sig_data)
                                 db.mark_signal(sig_row_id, "retrace_cap")
                                 all_signals.append(sig_data)
@@ -226,7 +226,6 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                         # Bullish histogram -> block SELL
                                         logger.info("  MACD BLOCK: %s SELL [%s] blocked (hist=%.4f > 0, bullish momentum)",
                                             inst_name, tf, _macd_hist)
-                                        _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                         sig_row_id = db.save_signal(sig_data)
                                         db.mark_signal(sig_row_id, "macd_filter")
                                         all_signals.append(sig_data)
@@ -235,7 +234,6 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                         # Bearish histogram AND getting worse -> block BUY
                                         logger.info("  MACD BLOCK: %s BUY [%s] blocked (hist=%.4f < 0 & falling, bearish momentum)",
                                             inst_name, tf, _macd_hist)
-                                        _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                         sig_row_id = db.save_signal(sig_data)
                                         db.mark_signal(sig_row_id, "macd_filter")
                                         all_signals.append(sig_data)
@@ -267,7 +265,6 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 if sig.direction == "BUY" and current_price > entry_price * 1.003:
                                     logger.info("  RETRACE STALE: %s BUY [%s] entry=%.5f already passed (current=%.5f)",
                                         inst_name, tf, entry_price, current_price)
-                                    _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                     sig_row_id = db.save_signal(sig_data)
                                     db.mark_signal(sig_row_id, "stale_price")
                                     all_signals.append(sig_data)
@@ -275,7 +272,6 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                                 elif sig.direction == "SELL" and current_price < entry_price * 0.997:
                                     logger.info("  RETRACE STALE: %s SELL [%s] entry=%.5f already passed (current=%.5f)",
                                         inst_name, tf, entry_price, current_price)
-                                    _retrace_signal_cooldown[(inst, sig.direction, tf)] = time.time()
                                     sig_row_id = db.save_signal(sig_data)
                                     db.mark_signal(sig_row_id, "stale_price")
                                     all_signals.append(sig_data)
