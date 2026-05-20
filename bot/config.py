@@ -88,8 +88,9 @@ INSTRUMENT_MAP = {
     "btcusd": "BTCUSD", "ethusd": "ETHUSD",
     "eurusd": "EURUSD", "gbpusd": "GBPUSD", "usdjpy": "USDJPY",
     "audusd": "AUDUSD", "nzdusd": "NZDUSD", "usdcad": "USDCAD", "usdchf": "USDCHF",
-    "audcad": "AUDCAD",
-    "nas100": "US100", "spx500": "US500", "us30": "US30",
+    "audcad": "AUDCAD", "audchf": "AUDCHF", "cadchf": "CADCHF",
+    "nas100": "US100", "spx500": "US500", "us30": "US30", "de40": "DE40",
+    "solusd": "SOLUSD", "naturalgas": "NATURALGAS",
 }
 INSTRUMENT_DISPLAY = {v: k.upper() for k, v in INSTRUMENT_MAP.items()}
 PIP_SIZE = {
@@ -97,22 +98,24 @@ PIP_SIZE = {
     "BTCUSD": 1.0, "ETHUSD": 0.01,
     "EURUSD": 0.0001, "GBPUSD": 0.0001, "USDJPY": 0.01,
     "AUDUSD": 0.0001, "NZDUSD": 0.0001, "USDCAD": 0.0001, "USDCHF": 0.0001,
-    "AUDCAD": 0.0001,
-    "US100": 1.0, "US500": 0.1, "US30": 1.0,
+    "AUDCAD": 0.0001, "AUDCHF": 0.0001, "CADCHF": 0.0001,
+    "US100": 1.0, "US500": 0.1, "US30": 1.0, "DE40": 1.0,
+    "SOLUSD": 0.01, "NATURALGAS": 0.001,
 }
 DEFAULT_SIZE = {
     "OIL_CRUDE": 1, "GOLD": 0.01, "SILVER": 0.1,
     "BTCUSD": 0.01, "ETHUSD": 0.1,
     "EURUSD": 1000, "GBPUSD": 1000, "USDJPY": 1000,
     "AUDUSD": 1000, "NZDUSD": 1000, "USDCAD": 1000, "USDCHF": 1000,
-    "AUDCAD": 1500,
-    "US100": 0.1, "US500": 0.1, "US30": 0.1,
+    "AUDCAD": 1500, "AUDCHF": 1000, "CADCHF": 1000,
+    "US100": 0.1, "US500": 0.1, "US30": 0.1, "DE40": 0.1,
+    "SOLUSD": 1.0, "NATURALGAS": 1.0,
 }
 TIMEFRAME_MAP = {
     "M1": "MINUTE", "M5": "MINUTE_5", "M15": "MINUTE_15", "M30": "MINUTE_30",
     "H1": "HOUR", "H4": "HOUR_4", "D": "DAY", "W": "WEEK",
 }
-DEFAULT_INSTRUMENTS = ["gold", "crude", "eurusd", "gbpusd", "usdjpy", "btcusd", "ethusd", "nas100", "spx500"]
+DEFAULT_INSTRUMENTS = ["gold", "crude", "eurusd", "gbpusd", "usdjpy", "btcusd", "ethusd", "nas100", "spx500", "de40", "solusd", "naturalgas", "audchf", "cadchf"]
 DEFAULT_TIMEFRAMES = ["M15", "H1", "H4"]
 WINNING_ZONE_COMBOS = {"retrace+buy", "retrace+sell", "bos+buy", "bearish+mss", "bos+sell", "bullish+mss", "bearish+mss+sell"}
 
