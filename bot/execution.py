@@ -69,6 +69,12 @@ def open_trade(client, instrument, direction, entry_price=None, stop_loss=None,
         status = confirm.get("dealStatus", "UNKNOWN")
         fill_price = confirm.get("level", current_price)
 
+        if status.upper() != "ACCEPTED" or not deal_id:
+            reason = confirm.get("reason") or confirm.get("errorCode") or status
+            logger.error("Trade rejected: %s %s (%s)", epic, direction, reason)
+            db.log_error("order", f"Trade rejected: {epic} {direction}", str(confirm))
+            return {"error": f"Trade rejected: {reason}", "confirm": confirm}
+
         # Persist trailing config
         if trail_config and deal_id:
             trail_config["direction"] = direction.upper()

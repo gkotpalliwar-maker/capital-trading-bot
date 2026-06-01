@@ -21,6 +21,43 @@ _executed_callbacks = {}  # sig_id -> timestamp
 CALLBACK_LOCK_SEC = 30
 
 
+def reconcile_open_trades_with_broker(client) -> int:
+    """Close local open trade rows that are no longer open at the broker.
+
+    This protects execution risk checks from stale SQLite rows left behind by
+    broker-side SL/TP closes, manual closes, or older rejected-order records.
+    If broker position fetch fails, no local rows are changed.
+    """
+    if client is None:
+        return 0
+
+    try:
+        resp = client.get("/api/v1/positions")
+        broker_deal_ids = {
+            p.get("position", {}).get("dealId")
+            for p in resp.get("positions", [])
+            if p.get("position", {}).get("dealId")
+        }
+    except Exception as exc:
+        logger.warning("Open-trade broker reconcile skipped: %s", exc)
+        return 0
+
+    closed_count = 0
+    for trade in db.get_open_trades():
+        deal_id = trade.get("deal_id")
+        if deal_id and deal_id not in broker_deal_ids:
+            db.close_trade_record(deal_id, reason="broker_reconcile")
+            try:
+                db.delete_trailing_config(deal_id)
+            except Exception:
+                pass
+            closed_count += 1
+
+    if closed_count:
+        logger.info("Open-trade broker reconcile closed %d stale DB rows", closed_count)
+    return closed_count
+
+
 def check_risk_allowed(client, instrument: str, direction: str,
                        epic: str = "") -> Tuple[bool, str]:
     """
@@ -32,6 +69,7 @@ def check_risk_allowed(client, instrument: str, direction: str,
         return False, f"Daily loss limit hit ({daily_pnl:.2f})"
 
     # 2. Max open trades
+    reconcile_open_trades_with_broker(client)
     open_trades = db.get_open_trades()
     if len(open_trades) >= MAX_OPEN_TRADES:
         return False, f"Max open trades ({MAX_OPEN_TRADES}) reached"
