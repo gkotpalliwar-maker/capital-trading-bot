@@ -12,6 +12,7 @@ python-telegram-bot>=20.0
 
 # ML
 scikit-learn>=1.2.0
+xgboost>=2.0.0
 
 # Web dashboard
 flask>=2.3.0

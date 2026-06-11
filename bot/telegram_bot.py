@@ -4,6 +4,7 @@ Signal alerts, trade execution, scanner control, risk status, analytics.
 """
 import asyncio
 import logging
+import os
 import time
 import json
 import threading
@@ -23,8 +24,11 @@ from news_commands import news_cmd, activate_guard_cmd, deactivate_guard_cmd, gu
 from positions_commands import positions_cmd, guard_button_callback
 from trailing_commands import trailing_cmd
 from trade_validator import store_pattern_context
+from ai_commands import register_ai_handlers
+from telegram_signal_parser import parse_signal_text
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, ContextTypes
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, filters
 )
 from config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DEFAULT_SIZE,
@@ -46,6 +50,8 @@ _pending_signals = {}
 scanner_active = True          # False = scanning paused
 manual_scan_requested = False  # True = trigger immediate scan
 manual_scan_timeframes = None  # Custom TFs for manual scan e.g. ["M1","M5"]
+TELEGRAM_SIGNAL_CHAT_ID = os.getenv("TELEGRAM_SIGNAL_CHAT_ID", "")
+SIGNAL_AUTO_EXECUTE = os.getenv("SIGNAL_AUTO_EXECUTE", "false").lower() == "true"
 
 
 # ================================================================
@@ -809,6 +815,77 @@ try:
 except ImportError:
     HAS_INTEL = False
 
+
+async def signal_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Parse optional external-channel signal text and pass it through AI gate."""
+    if not TELEGRAM_SIGNAL_CHAT_ID:
+        return
+    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+    if chat_id != str(TELEGRAM_SIGNAL_CHAT_ID):
+        return
+    text = update.effective_message.text if update.effective_message else ""
+    sig = parse_signal_text(text)
+    if not sig:
+        return
+
+    import ai_gatekeeper
+    import persistence as db
+    import risk_manager
+    from execution import open_trade
+
+    approved, score, source, _features = ai_gatekeeper.evaluate_signal(sig, df=None)
+    score_text = f"{score:.1%}" if score is not None else "N/A"
+    sig["guardrail_text"] = f"AI Gatekeeper: {'approved' if approved else 'blocked'} ({score_text})"
+
+    sig_row_id = db.save_signal(sig)
+    sig["_db_id"] = sig_row_id
+    sig["_created_at"] = time.time()
+
+    if not approved:
+        db.mark_signal(sig_row_id, "ai_blocked")
+        send_message_sync(
+            "Signal Blocked by AI (Time/Regime Filter)\n"
+            f"{sig['inst_name']} {sig['direction']} [{sig['tf']}]\n"
+            f"Score: {score_text}"
+        )
+        return
+
+    if source == "fail_open":
+        send_message_sync("AI gatekeeper unavailable - parsed Telegram signal is running unfiltered.")
+
+    if not SIGNAL_AUTO_EXECUTE:
+        notify_signal(sig, executable=True)
+        return
+
+    risk_ok, risk_msg = risk_manager.check_risk_allowed(_client, sig["instrument"], sig["direction"], sig["inst_name"])
+    if not risk_ok:
+        send_message_sync(f"Signal approved by AI but risk blocked: {risk_msg}")
+        return
+    exec_ok, exec_msg = risk_manager.check_execution_valid(_client, sig)
+    if not exec_ok:
+        send_message_sync(f"Signal approved by AI but validation failed: {exec_msg}")
+        return
+    result = open_trade(
+        _client,
+        instrument=sig["instrument"],
+        direction=sig["direction"],
+        entry_price=sig.get("entry"),
+        stop_loss=sig.get("sl"),
+        take_profit=sig.get("tp"),
+        signal_id=sig_row_id,
+        signal_data=sig,
+    )
+    if "error" in result:
+        send_message_sync(f"AI-approved trade failed: {result['error']}")
+        return
+    db.mark_signal(sig_row_id, "executed")
+    send_message_sync(
+        "Trade Executed (AI Approved)\n"
+        f"{sig['inst_name']} {sig['direction']} [{sig['tf']}]\n"
+        f"Deal: {result.get('deal_id', '?')}"
+    )
+
+
 def setup_telegram_app():
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set"); return None
@@ -851,10 +928,12 @@ def setup_telegram_app():
     app.add_handler(CommandHandler("guardstatus", guard_status_cmd))
     app.add_handler(CommandHandler("summary", summary_cmd))
     app.add_handler(CommandHandler("trailing", trailing_cmd))
+    register_ai_handlers(app)
 
     # v2.8.0: Market intelligence
     if HAS_INTEL:
         app.add_handler(CommandHandler("intel", intel_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, signal_text_handler))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     async def _error_handler(update, context):

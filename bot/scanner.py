@@ -34,6 +34,14 @@ from bot_trailing import TrailingManager
 from execution import get_current_price, get_instrument_atr
 
 try:
+    import ai_gatekeeper
+    HAS_AI_GATEKEEPER = True
+except Exception as e:
+    ai_gatekeeper = None
+    HAS_AI_GATEKEEPER = False
+    logger.warning("AI gatekeeper unavailable: %s", e)
+
+try:
     from news_filter import check_news_risk, is_guard_active, NEWS_CONFLUENCE_PENALTY, NEWS_REQUIRED
 except ImportError:
     check_news_risk = None
@@ -120,6 +128,7 @@ if MACD_FILTER_ENABLED:
     logger.info("  MACD directional filter active (block counter-trend entries)")
 
 _running = True
+_ai_fail_open_notified = False
 
 def _signal_handler(sig, frame):
     global _running
@@ -127,6 +136,46 @@ def _signal_handler(sig, frame):
     _running = False
 _signal.signal(_signal.SIGTERM, _signal_handler)
 _signal.signal(_signal.SIGINT, _signal_handler)
+
+
+def _apply_ai_gatekeeper(sig_data, df):
+    """Return True when a signal may be notified/executed."""
+    global _ai_fail_open_notified
+    if not HAS_AI_GATEKEEPER or ai_gatekeeper is None:
+        return True
+
+    approved, score, source, _features = ai_gatekeeper.evaluate_signal(sig_data, df=df)
+    sig_data["ai_gatekeeper"] = {
+        "approved": approved,
+        "score": score,
+        "source": source,
+    }
+
+    if source == "fail_open":
+        if not _ai_fail_open_notified:
+            telegram_bot.send_message_sync(
+                "AI gatekeeper unavailable - bot is running unfiltered until a model is trained/loaded."
+            )
+            _ai_fail_open_notified = True
+        return True
+
+    score_text = f"{score:.1%}" if score is not None else "N/A"
+    if approved:
+        sig_data["guardrail_text"] = (
+            sig_data.get("guardrail_text", "") + f"\nAI Gatekeeper: approved ({score_text})"
+        ).strip()
+        return True
+
+    sig_data["guardrail_text"] = (
+        sig_data.get("guardrail_text", "") + f"\nAI Gatekeeper: blocked ({score_text})"
+    ).strip()
+    telegram_bot.send_message_sync(
+        "Signal Blocked by AI (Time/Regime Filter)\n"
+        f"{sig_data.get('inst_name', sig_data.get('instrument', '?'))} "
+        f"{sig_data.get('direction', '?')} [{sig_data.get('tf', '?')}]\n"
+        f"Score: {score_text}"
+    )
+    return False
 
 
 def scan_and_notify(client, strategy, instruments, timeframes):
@@ -328,6 +377,14 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                             }
                             sig_data["guardrail_text"] = ""
                             sig_data["guardrail_score"] = 0
+                            if not _apply_ai_gatekeeper(sig_data, df):
+                                sig_row_id = db.save_signal(sig_data)
+                                db.mark_signal(sig_row_id, "ai_blocked")
+                                all_signals.append(sig_data)
+                                logger.info("  AI BLOCKED: %s %s [%s] score=%s",
+                                    inst_name, sig.direction, tf,
+                                    sig_data.get("ai_gatekeeper", {}).get("score"))
+                                continue
                             sig_row_id = db.save_signal(sig_data)
                             sig_data["_db_id"] = sig_row_id
                             sig_data["_created_at"] = time.time()
@@ -470,6 +527,14 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                     sig_row_id = db.save_signal(sig_d)
                     sig_d["_db_id"] = sig_row_id
                     sig_d["_created_at"] = time.time()
+                    if dec["status"] in (signal_decision.EXECUTABLE, signal_decision.ALERT):
+                        if not _apply_ai_gatekeeper(sig_d, None):
+                            db.mark_signal(sig_row_id, "ai_blocked")
+                            logger.info("  AI BLOCKED: %s %s [%s] score=%s",
+                                inst_name, sig_d["direction"], sig_d["tf"],
+                                sig_d.get("ai_gatekeeper", {}).get("score"))
+                            all_signals.append(sig_d)
+                            continue
                     if dec["status"] == signal_decision.EXECUTABLE:
                         logger.info("  EXECUTABLE: %s %s [%s] score=%d [%s]",
                             inst_name, sig_d["direction"], sig_d["tf"], dec["score"], action)
@@ -489,6 +554,14 @@ def scan_and_notify(client, strategy, instruments, timeframes):
                     sig_row_id = db.save_signal(sig_d)
                     sig_d["_db_id"] = sig_row_id
                     sig_d["_created_at"] = time.time()
+                    if dec["status"] in (signal_decision.EXECUTABLE, signal_decision.ALERT):
+                        if not _apply_ai_gatekeeper(sig_d, None):
+                            db.mark_signal(sig_row_id, "ai_blocked")
+                            logger.info("  AI BLOCKED: %s %s [%s] score=%s",
+                                inst_name, sig_d["direction"], sig_d["tf"],
+                                sig_d.get("ai_gatekeeper", {}).get("score"))
+                            all_signals.append(sig_d)
+                            continue
                     if dec["status"] == signal_decision.EXECUTABLE:
                         telegram_bot.notify_signal(sig_d)
                         logger.info("  EXECUTABLE: %s %s [%s] score=%d",
